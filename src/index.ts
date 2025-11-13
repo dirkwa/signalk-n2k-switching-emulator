@@ -37,7 +37,7 @@ export default function (app: any) {
         if ( !bank.switches || !bank.switches.length ) {
           return
         }
-        switchBanks[bank.instance] = bank.switches
+        switchBanks[bank.instance] = bank
         app.subscriptionmanager.subscribe(
           {
             context: 'vessels.self',
@@ -83,7 +83,7 @@ export default function (app: any) {
           if (msg.pgn == 127502) {
             const camel = msg.fields['instance']
             const instance = camel !== undefined ? camel : msg.fields['Instance'] 
-            const paths = switchBanks[instance]
+            const paths = switchBanks[instance]?.switches
             if (paths) {
               debug('msg: ' + JSON.stringify(msg))
 
@@ -94,8 +94,23 @@ export default function (app: any) {
                   if (paths.length < i - 1) {
                     error(`no path for switch ${i} bank ${instance}`)
                   } else {
-                    debug(`Switch ${i} ${val}`)
-                    app.putSelfPath(paths[i - 1], val === 'On' ? 1 : 0)
+                    const path = paths[i - 1]
+                    if ( switchBanks[instance].momentaryPush ) {
+                      if ( val === 'On' ) {
+                        const current = app.getSelfPath(path)
+                        let newVal
+                        if (typeof current === 'boolean') {
+                          newVal = !current
+                        } else {
+                          newVal = current === 1 ? 0 : 1
+                        }
+                        debug(`setting ${path} to ${newVal}`)
+                        app.putSelfPath(path, newVal)
+                      }
+                    } else {
+                      debug(`Switch ${i} ${val}`)
+                      app.putSelfPath(path, val === 'On' ? 1 : 0)
+                    }
                   }
                 }
               }
@@ -156,6 +171,12 @@ export default function (app: any) {
                   type: 'number',
                   description: 'Rate (in seconds) to send to N2K (set to 0 to not send updates)',
                   default: 15
+                },
+                momentaryPush: {
+                  title: 'Momentary Push',
+                  type: 'boolean',
+                  description: 'Toggle the switches when the incoming n2k switch is turned on',
+                  default: false
                 },
                 switches: {
                   type: 'array',
