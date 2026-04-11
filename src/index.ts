@@ -13,7 +13,15 @@
  * limitations under the License.
  */
 
-import { PGN_127502, PGN_127501, mapCamelCaseKeys } from '@canboat/ts-pgns'
+import {
+  PGN_127502,
+  PGN_127501,
+  PGN_126208_NmeaCommandGroupFunction,
+  PGN_126208_NmeaAcknowledgeGroupFunction,
+  GroupFunction,
+  PgnErrorCode,
+  mapCamelCaseKeys
+} from '@canboat/ts-pgns'
 import { satisfies } from 'semver'
 
 export default function (app: any) {
@@ -29,12 +37,12 @@ export default function (app: any) {
     start: function (properties: any) {
       props = properties
 
-      if ( !props?.banks || !props.banks.length ) {
+      if (!props?.banks || !props.banks.length) {
         return
       }
 
       props.banks.forEach((bank: any) => {
-        if ( !bank.switches || !bank.switches.length ) {
+        if (!bank.switches || !bank.switches.length) {
           return
         }
         switchBanks[bank.instance] = bank.switches
@@ -55,51 +63,147 @@ export default function (app: any) {
 
             delta.updates?.forEach((update: any) => {
               update.values?.forEach((vp: any) => {
-                ;(pgn.fields as any)[`indicator${bank.switches.indexOf(vp.path) + 1}`] =
-                  vp.value === 1 || vp.value === true ? 'On' : 'Off'
+                ;(pgn.fields as any)[
+                  `indicator${bank.switches.indexOf(vp.path) + 1}`
+                ] = vp.value === 1 || vp.value === true ? 'On' : 'Off'
               })
             })
-            pgn = needsCamelMapping ? mapCamelCaseKeys(pgn) as PGN_127501: pgn
+            pgn = needsCamelMapping
+              ? (mapCamelCaseKeys(pgn) as PGN_127501)
+              : pgn
             debug('sending %j', pgn)
             app.emit('nmea2000JsonOut', pgn)
           }
         )
         if (bank.sendRate) {
-          const interval = setInterval(
-            () => {
-              let pgn = makeBinaryStatusReport(bank)
-              pgn = needsCamelMapping ? mapCamelCaseKeys(pgn) as PGN_127501 : pgn
-              debug('sending update %j', pgn)
-              app.emit('nmea2000JsonOut', pgn)
-            },
-            bank.sendRate * 1000
-          )
+          const interval = setInterval(() => {
+            let pgn = makeBinaryStatusReport(bank)
+            pgn = needsCamelMapping
+              ? (mapCamelCaseKeys(pgn) as PGN_127501)
+              : pgn
+            debug('sending update %j', pgn)
+            app.emit('nmea2000JsonOut', pgn)
+          }, bank.sendRate * 1000)
           onStop.push(() => clearInterval(interval))
         }
       })
+
+      const applySwitchState = (
+        instance: any,
+        channel: number,
+        rawValue: any
+      ) => {
+        const paths = switchBanks[instance]
+        if (!paths) {
+          return
+        }
+        if (channel < 1 || channel > 28) {
+          return
+        }
+        if (paths.length < channel) {
+          error(`no path for switch ${channel} bank ${instance}`)
+          return
+        }
+        debug(`Switch ${channel} ${rawValue}`)
+        app.putSelfPath(
+          paths[channel - 1],
+          rawValue === 'On' || rawValue === 1 || rawValue === true ? 1 : 0
+        )
+      }
+
+      const sendAcknowledge = (
+        commandedPgn: number,
+        dst: number,
+        errorCode: PgnErrorCode
+      ) => {
+        if (dst === undefined || dst === 255) {
+          return
+        }
+        const ack = new PGN_126208_NmeaAcknowledgeGroupFunction(
+          {
+            pgn: commandedPgn,
+            pgnErrorCode: errorCode,
+            transmissionIntervalPriorityErrorCode: 0,
+            numberOfParameters: 0,
+            list: []
+          },
+          dst
+        )
+        const outgoing = needsCamelMapping
+          ? (mapCamelCaseKeys(ack) as PGN_126208_NmeaAcknowledgeGroupFunction)
+          : ack
+        debug('sending ACK %j', outgoing)
+        app.emit('nmea2000JsonOut', outgoing)
+      }
 
       const n2kCallback = (msg: any) => {
         try {
           if (msg.pgn == 127502) {
             const camel = msg.fields['instance']
-            const instance = camel !== undefined ? camel : msg.fields['Instance'] 
-            const paths = switchBanks[instance]
-            if (paths) {
+            const instance =
+              camel !== undefined ? camel : msg.fields['Instance']
+            if (switchBanks[instance]) {
               debug('msg: ' + JSON.stringify(msg))
 
               for (let i = 1; i < 29; i++) {
                 const lowerVal = msg.fields[`switch${i}`]
-                const val = lowerVal !== undefined ? lowerVal : msg.fields[`Switch${i}`]
+                const val =
+                  lowerVal !== undefined ? lowerVal : msg.fields[`Switch${i}`]
                 if (typeof val !== 'undefined') {
-                  if (paths.length < i - 1) {
-                    error(`no path for switch ${i} bank ${instance}`)
-                  } else {
-                    debug(`Switch ${i} ${val}`)
-                    app.putSelfPath(paths[i - 1], val === 'On' ? 1 : 0)
-                  }
+                  applySwitchState(instance, i, val)
                 }
               }
             }
+          } else if (msg.pgn == 126208) {
+            const functionCode =
+              msg.fields['functionCode'] !== undefined
+                ? msg.fields['functionCode']
+                : msg.fields['Function Code']
+            if (functionCode !== GroupFunction.Command && functionCode !== 1) {
+              return
+            }
+            const commandedPgn =
+              msg.fields['pgn'] !== undefined
+                ? msg.fields['pgn']
+                : msg.fields['PGN'] !== undefined
+                ? msg.fields['PGN']
+                : msg.fields['Commanded PGN']
+            if (commandedPgn != 127501) {
+              return
+            }
+            const list = msg.fields['list'] || msg.fields['List'] || []
+            if (!Array.isArray(list) || list.length === 0) {
+              return
+            }
+
+            let instance: any = undefined
+            const channelUpdates: { channel: number; value: any }[] = []
+
+            list.forEach((pair: any) => {
+              const parameter =
+                pair.parameter !== undefined ? pair.parameter : pair.Parameter
+              const value = pair.value !== undefined ? pair.value : pair.Value
+              if (parameter == 1) {
+                instance = value
+              } else if (
+                typeof parameter === 'number' &&
+                parameter >= 2 &&
+                parameter <= 29
+              ) {
+                channelUpdates.push({ channel: parameter - 1, value })
+              }
+            })
+
+            if (instance === undefined || !switchBanks[instance]) {
+              sendAcknowledge(127501, msg.src, PgnErrorCode.PgnNotAvailable)
+              return
+            }
+
+            debug('msg: ' + JSON.stringify(msg))
+            channelUpdates.forEach(({ channel, value }) => {
+              applySwitchState(instance, channel, value)
+            })
+            sendAcknowledge(127501, msg.src, PgnErrorCode.Acknowledge)
           }
         } catch (e) {
           error(e)
@@ -120,13 +224,19 @@ export default function (app: any) {
       'Signal K Plugin which makes existing switches in sk available as n2k switches',
 
     schema: () => {
-      let paths = app.streambundle.getAvailablePaths()
-          .filter((path:any) => path && path.startsWith('electrical.switches.') && path.endsWith('.state'))
-      
-      if ( props ) {
-        props.banks?.forEach((bank:any) => {
-          bank.switches?.forEach((sw:any) => {
-            if ( paths.indexOf(sw) === -1 ) {
+      let paths = app.streambundle
+        .getAvailablePaths()
+        .filter(
+          (path: any) =>
+            path &&
+            path.startsWith('electrical.switches.') &&
+            path.endsWith('.state')
+        )
+
+      if (props) {
+        props.banks?.forEach((bank: any) => {
+          bank.switches?.forEach((sw: any) => {
+            if (paths.indexOf(sw) === -1) {
               paths.push(sw)
             }
           })
@@ -154,7 +264,8 @@ export default function (app: any) {
                 sendRate: {
                   title: 'Send Rate',
                   type: 'number',
-                  description: 'Rate (in seconds) to send to N2K (set to 0 to not send updates)',
+                  description:
+                    'Rate (in seconds) to send to N2K (set to 0 to not send updates)',
                   default: 15
                 },
                 switches: {
@@ -173,12 +284,12 @@ export default function (app: any) {
       }
     }
   }
-  
+
   function makeBinaryStatusReport (bank: any) {
     const pgn = new PGN_127501({
       instance: bank.instance
     })
-    
+
     bank.switches?.forEach((sw: any, index: number) => {
       const value = app.getSelfPath(sw)
       if (value && typeof value.value !== 'undefined') {
