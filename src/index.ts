@@ -16,7 +16,6 @@
 import {
   PGN_127502,
   PGN_127501,
-  PGN_126208_NmeaCommandGroupFunction,
   PGN_126208_NmeaAcknowledgeGroupFunction,
   GroupFunction,
   PgnErrorCode,
