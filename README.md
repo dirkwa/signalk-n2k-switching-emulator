@@ -14,3 +14,8 @@ indicated switch bank:
 
 After applying the update, the plugin replies with a pgn 126208 Acknowledge
 Group Function addressed to the sender.
+
+The plugin also responds to pgn 59904 ISO Request when the requested PGN is
+127501. On receipt it immediately broadcasts a pgn 127501 Binary Status
+Report for every configured switch bank, so MFDs can pull the current state
+on demand without waiting for the next periodic send.
