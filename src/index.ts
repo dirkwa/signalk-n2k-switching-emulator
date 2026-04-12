@@ -135,8 +135,33 @@ export default function (app: any) {
         app.emit('nmea2000JsonOut', outgoing)
       }
 
+      const sendBinaryStatusReport = (bank: any) => {
+        let pgn = makeBinaryStatusReport(bank)
+        if (needsCamelMapping) {
+          pgn = mapCamelCaseKeys(pgn) as PGN_127501
+        }
+        debug('sending %j', pgn)
+        app.emit('nmea2000JsonOut', pgn)
+      }
+
       const n2kCallback = (msg: any) => {
         try {
+          if (msg.pgn == 59904) {
+            const requestedPgn =
+              msg.fields['pgn'] !== undefined
+                ? msg.fields['pgn']
+                : msg.fields['PGN']
+            if (requestedPgn != 127501) {
+              return
+            }
+            debug('ISO Request for 127501 from src %j', msg.src)
+            props.banks?.forEach((bank: any) => {
+              if (bank.switches && bank.switches.length) {
+                sendBinaryStatusReport(bank)
+              }
+            })
+            return
+          }
           if (msg.pgn == 127502) {
             const camel = msg.fields['instance']
             const instance =
