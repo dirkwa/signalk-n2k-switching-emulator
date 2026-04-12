@@ -347,6 +347,10 @@ export default function (app: any) {
   }
 
   function switchLabel (path: string): string {
+    const data = app.getSelfPath(path)
+    if (data?.meta?.displayName) {
+      return data.meta.displayName
+    }
     const parts = path.replace('electrical.switches.', '').replace('.state', '').split('.')
     return parts
       .map((p: string) => p.replace(/([A-Z])/g, ' $1').replace(/^./, (c: string) => c.toUpperCase()))
