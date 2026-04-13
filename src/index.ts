@@ -16,6 +16,7 @@
 import {
   PGN_127502,
   PGN_127501,
+  PGN_130060,
   PGN_126208_NmeaAcknowledgeGroupFunction,
   GroupFunction,
   PgnErrorCode,
@@ -144,6 +145,27 @@ export default function (app: any) {
         app.emit('nmea2000JsonOut', pgn)
       }
 
+      const sendLabels = (bank: any) => {
+        bank.switches?.forEach((sw: any, index: number) => {
+          const label = switchLabel(sw)
+          let pgn = new PGN_130060({
+            hardwareChannelId: index,
+            pgn: 127501,
+            dataSourceInstanceFieldNumber: 1,
+            dataSourceInstanceValue: bank.instance,
+            secondaryEnumerationFieldNumber: 0,
+            secondaryEnumerationFieldValue: 0,
+            parameterFieldNumber: index + 2,
+            label
+          })
+          if (needsCamelMapping) {
+            pgn = mapCamelCaseKeys(pgn) as PGN_130060
+          }
+          debug('sending label %j', pgn)
+          app.emit('nmea2000JsonOut', pgn)
+        })
+      }
+
       const n2kCallback = (msg: any) => {
         try {
           if (msg.pgn == 59904) {
@@ -151,15 +173,21 @@ export default function (app: any) {
               msg.fields['pgn'] !== undefined
                 ? msg.fields['pgn']
                 : msg.fields['PGN']
-            if (requestedPgn != 127501) {
-              return
+            if (requestedPgn == 127501) {
+              debug('ISO Request for 127501 from src %j', msg.src)
+              props.banks?.forEach((bank: any) => {
+                if (bank.switches && bank.switches.length) {
+                  sendBinaryStatusReport(bank)
+                }
+              })
+            } else if (requestedPgn == 130060) {
+              debug('ISO Request for 130060 from src %j', msg.src)
+              props.banks?.forEach((bank: any) => {
+                if (bank.switches && bank.switches.length) {
+                  sendLabels(bank)
+                }
+              })
             }
-            debug('ISO Request for 127501 from src %j', msg.src)
-            props.banks?.forEach((bank: any) => {
-              if (bank.switches && bank.switches.length) {
-                sendBinaryStatusReport(bank)
-              }
-            })
             return
           }
           if (msg.pgn == 127502) {
@@ -235,6 +263,15 @@ export default function (app: any) {
       }
       app.on('N2KAnalyzerOut', n2kCallback)
       onStop.push(() => app.removeListener('N2KAnalyzerOut', n2kCallback))
+
+      const labelTimer = setTimeout(() => {
+        props.banks?.forEach((bank: any) => {
+          if (bank.switches && bank.switches.length) {
+            sendLabels(bank)
+          }
+        })
+      }, 5000)
+      onStop.push(() => clearTimeout(labelTimer))
     },
 
     stop: function () {
@@ -307,6 +344,18 @@ export default function (app: any) {
         }
       }
     }
+  }
+
+  function switchLabel (path: string): string {
+    const data = app.getSelfPath(path)
+    if (data?.meta?.displayName) {
+      return data.meta.displayName
+    }
+    const parts = path.replace('electrical.switches.', '').replace('.state', '').split('.')
+    return parts
+      .map((p: string) => p.replace(/([A-Z])/g, ' $1').replace(/^./, (c: string) => c.toUpperCase()))
+      .join(' ')
+      .trim()
   }
 
   function makeBinaryStatusReport (bank: any) {
