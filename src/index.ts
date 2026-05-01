@@ -23,6 +23,20 @@ import {
   mapCamelCaseKeys
 } from '@canboat/ts-pgns'
 import { satisfies } from 'semver'
+import {
+  bepFrame,
+  CZONE_PGN_ANNOUNCE,
+  CZONE_PGN_CAPABILITY,
+  CZONE_PGN_CIRCUIT_DESCRIPTOR,
+  CZONE_PGN_DIPSWITCH_STATE,
+  deriveUniqueSerial,
+  packAnnounce,
+  packCapabilityBitmap,
+  packCircuitDescriptor,
+  packDipswitchState
+} from './czone'
+
+const CZONE_HEARTBEAT_MS = 500
 
 export default function (app: any) {
   const error = app.error
@@ -73,6 +87,9 @@ export default function (app: any) {
               : pgn
             debug('sending %j', pgn)
             app.emit('nmea2000JsonOut', pgn)
+            if (bank.czone?.enabled) {
+              sendCZoneStatusFrames(bank)
+            }
           }
         )
         if (bank.sendRate) {
@@ -85,6 +102,9 @@ export default function (app: any) {
             app.emit('nmea2000JsonOut', pgn)
           }, bank.sendRate * 1000)
           onStop.push(() => clearInterval(interval))
+        }
+        if (bank.czone?.enabled) {
+          startCZoneEmulation(bank)
         }
       })
 
@@ -337,6 +357,28 @@ export default function (app: any) {
                     type: 'string',
                     enum: paths.length > 0 ? paths : undefined
                   }
+                },
+                czone: {
+                  type: 'object',
+                  title:
+                    'CZone emulation (publish bank as a Navico CZone-compatible device)',
+                  properties: {
+                    enabled: { type: 'boolean', default: false },
+                    dipswitchGroup: {
+                      type: 'integer',
+                      title: 'Dipswitch group',
+                      default: 24,
+                      minimum: 1,
+                      maximum: 253
+                    },
+                    address: {
+                      type: 'integer',
+                      title: 'Emulated N2K source address',
+                      default: 67,
+                      minimum: 1,
+                      maximum: 252
+                    }
+                  }
                 }
               }
             }
@@ -346,14 +388,102 @@ export default function (app: any) {
     }
   }
 
+  function readIndicators (bank: any): boolean[] {
+    const out = new Array(28).fill(false)
+    bank.switches?.forEach((sw: any, index: number) => {
+      const value = app.getSelfPath(sw)
+      if (value && typeof value.value !== 'undefined') {
+        out[index] = value.value === 1 || value.value === true
+      }
+    })
+    return out
+  }
+
+  function czoneAddress (bank: any): number {
+    return bank.czone?.address ?? 67
+  }
+
+  function czoneGroup (bank: any): number {
+    return bank.czone?.dipswitchGroup ?? 24
+  }
+
+  function czoneSerial (bank: any): number {
+    return (
+      bank.czone?.uniqueSerial ??
+      deriveUniqueSerial(
+        app.config?.settings?.vesselUuid ?? app.config?.settings?.vesselMMSI
+      )
+    )
+  }
+
+  function sendCZoneStatusFrames (bank: any): void {
+    const indicators = readIndicators(bank)
+    const group = czoneGroup(bank)
+    const src = czoneAddress(bank)
+    for (let g = 0; g * 6 < indicators.length; g++) {
+      const offset = g * 6
+      const frame = bepFrame(
+        CZONE_PGN_DIPSWITCH_STATE,
+        src,
+        packDipswitchState(group + g, indicators, offset)
+      )
+      debug('sending czone 65283 %j', frame)
+      app.emit('nmea2000JsonOut', frame)
+    }
+    const cap = bepFrame(
+      CZONE_PGN_CAPABILITY,
+      src,
+      packCapabilityBitmap(group, 0x0f, indicators)
+    )
+    debug('sending czone 65284 %j', cap)
+    app.emit('nmea2000JsonOut', cap)
+  }
+
+  function startCZoneEmulation (bank: any): void {
+    const group = czoneGroup(bank)
+    const src = czoneAddress(bank)
+    const serial = czoneSerial(bank)
+    debug(
+      'czone emulation: bank=%d group=%d address=%d serial=%d',
+      bank.instance,
+      group,
+      src,
+      serial
+    )
+    const announce = bepFrame(
+      CZONE_PGN_ANNOUNCE,
+      src,
+      packAnnounce(serial, group)
+    )
+    app.emit('nmea2000JsonOut', announce)
+    const desc = bepFrame(
+      CZONE_PGN_CIRCUIT_DESCRIPTOR,
+      src,
+      packCircuitDescriptor(group)
+    )
+    app.emit('nmea2000JsonOut', desc)
+    const interval = setInterval(
+      () => sendCZoneStatusFrames(bank),
+      CZONE_HEARTBEAT_MS
+    )
+    onStop.push(() => clearInterval(interval))
+  }
+
   function switchLabel (path: string): string {
     const data = app.getSelfPath(path)
     if (data?.meta?.displayName) {
       return data.meta.displayName
     }
-    const parts = path.replace('electrical.switches.', '').replace('.state', '').split('.')
+    const parts = path
+      .replace('electrical.switches.', '')
+      .replace('.state', '')
+      .split('.')
     return parts
-      .map((p: string) => p.replace(/([A-Z])/g, ' $1').replace(/^./, (c: string) => c.toUpperCase()))
+      .map((p: string) =>
+        p
+          .replace(/([A-Z])/g, ' $1')
+          .replace(/^./, (c: string) => c.toUpperCase())
+      )
       .join(' ')
       .trim()
   }
