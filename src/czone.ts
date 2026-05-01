@@ -42,13 +42,31 @@ function header (): Buffer {
   return Buffer.from([CZONE_HEADER_LO, CZONE_HEADER_HI])
 }
 
-export function czoneFrame (pgn: number, payload: Buffer): any {
-  return {
-    pgn,
-    prio: 6,
-    dst: 255,
-    data: Buffer.concat([header(), payload])
-  }
+const CZONE_PRIORITY = 6
+
+/**
+ * Build a CZone proprietary frame as an Actisense-format string suitable
+ * for emission via the SignalK `nmea2000out` event.
+ *
+ * Emitted as a string rather than a JSON PGN object because canboatjs's
+ * `toPgn()` requires a registered PGN definition to serialize, and the
+ * CZone proprietary PGNs (65280/65283/65284/65290/130817) are not part of
+ * the standard canboat database; the raw `data` field on a JSON message
+ * is ignored. The Actisense string path passes the bytes through unchanged.
+ */
+export function czoneFrame (pgn: number, payload: Buffer): string {
+  const bytes = Buffer.concat([header(), payload])
+  const hex = Array.from(bytes)
+    .map(b =>
+      b
+        .toString(16)
+        .padStart(2, '0')
+        .toUpperCase()
+    )
+    .join(',')
+  return `${new Date().toISOString()},${CZONE_PRIORITY},${pgn},0,255,${
+    bytes.length
+  },${hex}`
 }
 
 /**

@@ -23,17 +23,21 @@ assert.equal(parseDipswitch(24), 24)
 assert.equal(parseDipswitch(undefined), 0x18)
 assert.equal(parseDipswitch('not-a-pattern'), 0x18)
 
-// czoneFrame prefixes the CZone (mfg=295, industry=4) header bytes 0x27 0x99
+// czoneFrame returns an Actisense-format string for emission via nmea2000out.
+// Format: timestamp,prio,pgn,src,dst,len,bb,bb,...
 const f = czoneFrame(65290, packAnnounce(0xdb13b, 0x18))
-assert.equal(f.pgn, 65290)
-assert.equal(f.dst, 255)
-assert.equal(f.data[0], 0x27, 'header low byte')
-assert.equal(f.data[1], 0x99, 'header high byte')
-// Reference announce payload from negrusti's working capture
-assert.deepEqual(
-  Array.from(f.data.slice(2)),
-  [0x3b, 0xb1, 0x0d, 0x00, 0x00, 0x18],
-  'PGN 65290 announce payload matches reference'
+assert.equal(typeof f, 'string', 'frame is an Actisense string')
+const parts = f.split(',')
+assert.equal(parts[1], '6', 'priority = 6')
+assert.equal(parts[2], '65290', 'pgn')
+assert.equal(parts[4], '255', 'broadcast dst')
+assert.equal(parts[5], '8', 'length = 2 header + 6 payload')
+const hex = parts.slice(6).join('').toLowerCase()
+// Header (mfg=295, industry=4) + reference payload from working capture
+assert.equal(
+  hex,
+  '2799' + '3bb10d000018',
+  'header + PGN 65290 announce payload'
 )
 
 // PGN 65284 circuit bitmap: dipswitch + 0x0F type + bitmap

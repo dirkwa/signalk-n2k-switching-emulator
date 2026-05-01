@@ -476,15 +476,15 @@ export default function (app: any) {
       CZONE_PGN_CIRCUIT_BITMAP,
       packCircuitBitmap(dipswitch, switches)
     )
-    debug('sending czone 65284 %j', bitmap)
-    app.emit('nmea2000JsonOut', bitmap)
+    debug('sending czone 65284 %s', bitmap)
+    app.emit('nmea2000out', bitmap)
 
     const status = czoneFrame(
       CZONE_PGN_STATUS_EXTENDED,
       packStatusExtended(dipswitch, switches)
     )
-    debug('sending czone 130817 %j', status)
-    app.emit('nmea2000JsonOut', status)
+    debug('sending czone 130817 %s', status)
+    app.emit('nmea2000out', status)
   }
 
   function startCZoneEmulation (): void {
@@ -502,7 +502,7 @@ export default function (app: any) {
       CZONE_PGN_ANNOUNCE,
       packAnnounce(serial, dipswitch)
     )
-    app.emit('nmea2000JsonOut', announce)
+    app.emit('nmea2000out', announce)
     const interval = setInterval(() => sendCZoneState(bank), CZONE_HEARTBEAT_MS)
     onStop.push(() => clearInterval(interval))
   }
