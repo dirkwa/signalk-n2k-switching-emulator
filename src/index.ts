@@ -33,7 +33,8 @@ import {
   packAnnounce,
   packCapabilityBitmap,
   packCircuitDescriptor,
-  packDipswitchState
+  packDipswitchState,
+  parseDipswitch
 } from './czone'
 
 const CZONE_HEARTBEAT_MS = 500
@@ -364,12 +365,13 @@ export default function (app: any) {
                     'CZone emulation (publish bank as a Navico CZone-compatible device)',
                   properties: {
                     enabled: { type: 'boolean', default: false },
-                    dipswitchGroup: {
-                      type: 'integer',
-                      title: 'Dipswitch group',
-                      default: 24,
-                      minimum: 1,
-                      maximum: 253
+                    dipswitch: {
+                      type: 'string',
+                      title: 'Dipswitch',
+                      description:
+                        'Eight-bit dipswitch as a binary string (the same string entered on the Zeus settings page), e.g. "00011000".',
+                      default: '00011000',
+                      pattern: '^[01]{8}$'
                     },
                     address: {
                       type: 'integer',
@@ -404,7 +406,7 @@ export default function (app: any) {
   }
 
   function czoneGroup (bank: any): number {
-    return bank.czone?.dipswitchGroup ?? 24
+    return parseDipswitch(bank.czone?.dipswitch)
   }
 
   function czoneSerial (bank: any): number {

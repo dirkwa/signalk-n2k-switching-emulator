@@ -6,8 +6,17 @@ import {
   packAnnounce,
   packCircuitDescriptor,
   packDipswitchState,
-  packCapabilityBitmap
+  packCapabilityBitmap,
+  parseDipswitch
 } from '../dist/czone.js'
+
+// dipswitch parsing: binary string preferred, integer accepted, fallback default
+assert.equal(parseDipswitch('00011000'), 0x18, 'binary string parses to byte')
+assert.equal(parseDipswitch('00010000'), 0x10)
+assert.equal(parseDipswitch('11111111'), 0xff)
+assert.equal(parseDipswitch(24), 24, 'integer passes through')
+assert.equal(parseDipswitch(undefined), 0x18, 'undefined uses default')
+assert.equal(parseDipswitch('not-a-pattern'), 0x18, 'invalid string uses default')
 
 // PGN 65290 announce: reference payload for serial 0xDB13B (897339), group 0x18
 const announce = packAnnounce(0xdb13b, 0x18)

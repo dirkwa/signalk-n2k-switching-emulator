@@ -102,6 +102,27 @@ export function packCapabilityBitmap (
 }
 
 /**
+ * Parse a CZone dipswitch setting. Accepts the eight-position binary
+ * string the user enters on the plotter's CZone settings page, e.g.
+ * "00011000". For convenience, a number is accepted unchanged (its low
+ * 8 bits become the dipswitch value).
+ *
+ * Defaults to 0x18 (the YDAB-01 CZone-emulation default).
+ */
+export function parseDipswitch (input: unknown): number {
+  if (typeof input === 'number' && Number.isFinite(input)) {
+    return input & 0xff
+  }
+  if (typeof input === 'string') {
+    const cleaned = input.trim()
+    if (/^[01]{8}$/.test(cleaned)) {
+      return parseInt(cleaned, 2)
+    }
+  }
+  return 0x18
+}
+
+/**
  * Derive a stable 20-bit unique serial from a string (vessel uuid, mmsi etc).
  */
 export function deriveUniqueSerial (seed: string | undefined): number {
