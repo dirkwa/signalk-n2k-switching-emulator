@@ -52,8 +52,6 @@ Two pieces of configuration:
    - `dipswitch` — eight-character binary string (e.g. `"00011000"`),
      the same value you'd enter on the MFD's CZone settings page. Must
      match the dipswitch your `.zcf` uses for this module.
-   - `address` — the N2K source address the emulated module claims
-     (default 67).
 
 ### What goes on the bus
 

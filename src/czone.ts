@@ -42,13 +42,11 @@ function header (): Buffer {
   return Buffer.from([CZONE_HEADER_LO, CZONE_HEADER_HI])
 }
 
-export function czoneFrame (pgn: number, src: number, payload: Buffer): any {
+export function czoneFrame (pgn: number, payload: Buffer): any {
   return {
     pgn,
     prio: 6,
     dst: 255,
-    src,
-    forceSrc: true,
     data: Buffer.concat([header(), payload])
   }
 }

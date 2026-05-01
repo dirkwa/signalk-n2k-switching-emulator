@@ -416,13 +416,6 @@ export default function (app: any) {
                   'Eight-bit dipswitch as a binary string (the same value entered on the plotter\'s CZone settings page), e.g. "00011000".',
                 default: '00011000',
                 pattern: '^[01]{8}$'
-              },
-              address: {
-                type: 'integer',
-                title: 'Emulated N2K source address',
-                default: 67,
-                minimum: 1,
-                maximum: 252
               }
             }
           }
@@ -466,10 +459,6 @@ export default function (app: any) {
     )
   }
 
-  function czoneSrc (): number {
-    return props?.czone?.address ?? 67
-  }
-
   function czoneDipswitch (): number {
     return parseDipswitch(props?.czone?.dipswitch)
   }
@@ -483,10 +472,8 @@ export default function (app: any) {
   function sendCZoneState (bank: any): void {
     const switches = readBankSwitchStates(bank)
     const dipswitch = czoneDipswitch()
-    const src = czoneSrc()
     const bitmap = czoneFrame(
       CZONE_PGN_CIRCUIT_BITMAP,
-      src,
       packCircuitBitmap(dipswitch, switches)
     )
     debug('sending czone 65284 %j', bitmap)
@@ -494,7 +481,6 @@ export default function (app: any) {
 
     const status = czoneFrame(
       CZONE_PGN_STATUS_EXTENDED,
-      src,
       packStatusExtended(dipswitch, switches)
     )
     debug('sending czone 130817 %j', status)
@@ -505,18 +491,15 @@ export default function (app: any) {
     const bank = findCZoneBank()
     if (!bank) return
     const dipswitch = czoneDipswitch()
-    const src = czoneSrc()
     const serial = czoneSerial()
     debug(
-      'czone emulation: bank=%d dipswitch=%d address=%d serial=%d',
+      'czone emulation: bank=%d dipswitch=%d serial=%d',
       bank.instance,
       dipswitch,
-      src,
       serial
     )
     const announce = czoneFrame(
       CZONE_PGN_ANNOUNCE,
-      src,
       packAnnounce(serial, dipswitch)
     )
     app.emit('nmea2000JsonOut', announce)

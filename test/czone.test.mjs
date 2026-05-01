@@ -24,10 +24,8 @@ assert.equal(parseDipswitch(undefined), 0x18)
 assert.equal(parseDipswitch('not-a-pattern'), 0x18)
 
 // czoneFrame prefixes the CZone (mfg=295, industry=4) header bytes 0x27 0x99
-const f = czoneFrame(65290, 67, packAnnounce(0xdb13b, 0x18))
+const f = czoneFrame(65290, packAnnounce(0xdb13b, 0x18))
 assert.equal(f.pgn, 65290)
-assert.equal(f.src, 67)
-assert.equal(f.forceSrc, true)
 assert.equal(f.dst, 255)
 assert.equal(f.data[0], 0x27, 'header low byte')
 assert.equal(f.data[1], 0x99, 'header high byte')
