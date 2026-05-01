@@ -72,6 +72,31 @@ Inbound circuit-control commands map circuit id `0x0D + n` to switch
 bank's switch path via `app.putSelfPath`, so a downstream plugin (relay
 driver, etc.) can turn the actual load on or off.
 
+### Dipswitch and `.zcf` matching
+
+The MFD uses the dipswitch in your `.zcf` to address a specific module.
+Three rules follow from that:
+
+1. **The plugin's `dipswitch` must match the dipswitch the `.zcf`
+   assigns to this module.** If they differ the MFD's commands target
+   a different dipswitch and the plugin never sees them.
+2. **Two devices on the bus must not share the same dipswitch.** If a
+   real CZone module is on the bus with the dipswitch you've configured
+   here, both devices will broadcast circuit state for the same
+   dipswitch and the MFD will see conflicting statuses. Either change
+   the plugin's dipswitch (and load a `.zcf` matching the new value),
+   or disconnect the conflicting hardware module before enabling
+   emulation.
+3. **You can leave a real CZone module physically connected** as long
+   as you upload a `.zcf` whose dipswitch differs from the real
+   module's — the MFD will simply stop addressing it.
+
+When testing, give the emulated circuits clearly different labels in
+the `.zcf` from anything in your existing setup. That way the MFD
+visibly switches to the new configuration once you upload it, which
+makes it obvious whether you're seeing the emulator or the old
+hardware.
+
 ### Limitations
 
 - One module (one dipswitch) per SignalK server.
