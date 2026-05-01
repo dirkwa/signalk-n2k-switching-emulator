@@ -24,20 +24,24 @@ import {
 } from '@canboat/ts-pgns'
 import { satisfies } from 'semver'
 import {
-  bepFrame,
+  circuitIdToSwitchIndex,
   CZONE_PGN_ANNOUNCE,
-  CZONE_PGN_CAPABILITY,
-  CZONE_PGN_CIRCUIT_DESCRIPTOR,
-  CZONE_PGN_DIPSWITCH_STATE,
+  CZONE_PGN_CIRCUIT_BITMAP,
+  CZONE_PGN_CIRCUIT_CONTROL,
+  CZONE_PGN_STATUS_EXTENDED,
+  CZONE_SUPPORTED_SWITCHES,
+  czoneFrame,
   deriveUniqueSerial,
+  isCircuitStateQuery,
   packAnnounce,
-  packCapabilityBitmap,
-  packCircuitDescriptor,
-  packDipswitchState,
+  packBinaryStatusReport,
+  packCircuitBitmap,
+  packStatusExtended,
+  parseCircuitControl,
   parseDipswitch
 } from './czone'
 
-const CZONE_HEARTBEAT_MS = 500
+const CZONE_HEARTBEAT_MS = 2000
 
 export default function (app: any) {
   const error = app.error
@@ -88,8 +92,8 @@ export default function (app: any) {
               : pgn
             debug('sending %j', pgn)
             app.emit('nmea2000JsonOut', pgn)
-            if (bank.czone?.enabled) {
-              sendCZoneStatusFrames(bank)
+            if (bank.czoneEnabled) {
+              sendCZoneState(bank)
             }
           }
         )
@@ -104,10 +108,9 @@ export default function (app: any) {
           }, bank.sendRate * 1000)
           onStop.push(() => clearInterval(interval))
         }
-        if (bank.czone?.enabled) {
-          startCZoneEmulation(bank)
-        }
       })
+
+      startCZoneEmulation()
 
       const applySwitchState = (
         instance: any,
@@ -187,8 +190,39 @@ export default function (app: any) {
         })
       }
 
+      const onCZoneCircuitControl = (msg: any) => {
+        const bank = findCZoneBank()
+        if (!bank) return
+        const result = parseCircuitControl(extractRawPayload(msg))
+        if (!result) return
+        const switchIndex = circuitIdToSwitchIndex(result.circuitId)
+        if (switchIndex < 0) return
+        const path = bank.switches?.[switchIndex]
+        if (!path) return
+        debug(
+          'czone circuit %d -> switch %d path %s = %s',
+          result.circuitId,
+          switchIndex + 1,
+          path,
+          result.on ? 'on' : 'off'
+        )
+        app.putSelfPath(path, result.on ? 1 : 0)
+        sendCZoneState(bank)
+      }
+
       const n2kCallback = (msg: any) => {
         try {
+          if (msg.pgn == CZONE_PGN_CIRCUIT_CONTROL) {
+            onCZoneCircuitControl(msg)
+            return
+          }
+          if (msg.pgn == CZONE_PGN_CIRCUIT_BITMAP) {
+            if (isCircuitStateQuery(extractRawPayload(msg))) {
+              const bank = findCZoneBank()
+              if (bank) sendCZoneState(bank)
+            }
+            return
+          }
           if (msg.pgn == 59904) {
             const requestedPgn =
               msg.fields['pgn'] !== undefined
@@ -359,29 +393,36 @@ export default function (app: any) {
                     enum: paths.length > 0 ? paths : undefined
                   }
                 },
-                czone: {
-                  type: 'object',
+                czoneEnabled: {
+                  type: 'boolean',
                   title:
-                    'CZone emulation (publish bank as a Navico CZone-compatible device)',
-                  properties: {
-                    enabled: { type: 'boolean', default: false },
-                    dipswitch: {
-                      type: 'string',
-                      title: 'Dipswitch',
-                      description:
-                        'Eight-bit dipswitch as a binary string (the same string entered on the Zeus settings page), e.g. "00011000".',
-                      default: '00011000',
-                      pattern: '^[01]{8}$'
-                    },
-                    address: {
-                      type: 'integer',
-                      title: 'Emulated N2K source address',
-                      default: 67,
-                      minimum: 1,
-                      maximum: 252
-                    }
-                  }
+                    'Expose this bank as the CZone module (configure CZone settings below)',
+                  default: false
                 }
+              }
+            }
+          },
+          czone: {
+            type: 'object',
+            title:
+              'CZone emulation (publish a bank as a Navico CZone-compatible module)',
+            description:
+              'A CZone module is identified by a single dipswitch on the network. Enable on at most one bank above; all enabled banks share this configuration.',
+            properties: {
+              dipswitch: {
+                type: 'string',
+                title: 'Dipswitch',
+                description:
+                  'Eight-bit dipswitch as a binary string (the same value entered on the plotter\'s CZone settings page), e.g. "00011000".',
+                default: '00011000',
+                pattern: '^[01]{8}$'
+              },
+              address: {
+                type: 'integer',
+                title: 'Emulated N2K source address',
+                default: 67,
+                minimum: 1,
+                maximum: 252
               }
             }
           }
@@ -390,9 +431,27 @@ export default function (app: any) {
     }
   }
 
-  function readIndicators (bank: any): boolean[] {
-    const out = new Array(28).fill(false)
+  function extractRawPayload (msg: any): Buffer | undefined {
+    if (Buffer.isBuffer(msg?.data)) return msg.data
+    const dataField = msg?.fields?.Data ?? msg?.fields?.data
+    if (typeof dataField === 'string') {
+      const cleaned = dataField.replace(/[^0-9a-fA-F]/g, '')
+      if (cleaned.length % 2 !== 0) return undefined
+      const buf = Buffer.alloc(2 + cleaned.length / 2)
+      buf[0] = 0x27
+      buf[1] = 0x99
+      for (let i = 0; i < cleaned.length / 2; i++) {
+        buf[2 + i] = parseInt(cleaned.substr(i * 2, 2), 16)
+      }
+      return buf
+    }
+    return undefined
+  }
+
+  function readBankSwitchStates (bank: any): boolean[] {
+    const out = new Array(CZONE_SUPPORTED_SWITCHES).fill(false)
     bank.switches?.forEach((sw: any, index: number) => {
+      if (index >= CZONE_SUPPORTED_SWITCHES) return
       const value = app.getSelfPath(sw)
       if (value && typeof value.value !== 'undefined') {
         out[index] = value.value === 1 || value.value === true
@@ -401,73 +460,67 @@ export default function (app: any) {
     return out
   }
 
-  function czoneAddress (bank: any): number {
-    return bank.czone?.address ?? 67
-  }
-
-  function czoneGroup (bank: any): number {
-    return parseDipswitch(bank.czone?.dipswitch)
-  }
-
-  function czoneSerial (bank: any): number {
-    return (
-      bank.czone?.uniqueSerial ??
-      deriveUniqueSerial(
-        app.config?.settings?.vesselUuid ?? app.config?.settings?.vesselMMSI
-      )
+  function findCZoneBank (): any | undefined {
+    return props?.banks?.find(
+      (b: any) => b?.czoneEnabled && b.switches && b.switches.length
     )
   }
 
-  function sendCZoneStatusFrames (bank: any): void {
-    const indicators = readIndicators(bank)
-    const group = czoneGroup(bank)
-    const src = czoneAddress(bank)
-    for (let g = 0; g * 6 < indicators.length; g++) {
-      const offset = g * 6
-      const frame = bepFrame(
-        CZONE_PGN_DIPSWITCH_STATE,
-        src,
-        packDipswitchState(group + g, indicators, offset)
-      )
-      debug('sending czone 65283 %j', frame)
-      app.emit('nmea2000JsonOut', frame)
-    }
-    const cap = bepFrame(
-      CZONE_PGN_CAPABILITY,
+  function czoneSrc (): number {
+    return props?.czone?.address ?? 67
+  }
+
+  function czoneDipswitch (): number {
+    return parseDipswitch(props?.czone?.dipswitch)
+  }
+
+  function czoneSerial (): number {
+    return deriveUniqueSerial(
+      app.config?.settings?.vesselUuid ?? app.config?.settings?.vesselMMSI
+    )
+  }
+
+  function sendCZoneState (bank: any): void {
+    const switches = readBankSwitchStates(bank)
+    const dipswitch = czoneDipswitch()
+    const src = czoneSrc()
+    const bitmap = czoneFrame(
+      CZONE_PGN_CIRCUIT_BITMAP,
       src,
-      packCapabilityBitmap(group, 0x0f, indicators)
+      packCircuitBitmap(dipswitch, switches)
     )
-    debug('sending czone 65284 %j', cap)
-    app.emit('nmea2000JsonOut', cap)
+    debug('sending czone 65284 %j', bitmap)
+    app.emit('nmea2000JsonOut', bitmap)
+
+    const status = czoneFrame(
+      CZONE_PGN_STATUS_EXTENDED,
+      src,
+      packStatusExtended(dipswitch, switches)
+    )
+    debug('sending czone 130817 %j', status)
+    app.emit('nmea2000JsonOut', status)
   }
 
-  function startCZoneEmulation (bank: any): void {
-    const group = czoneGroup(bank)
-    const src = czoneAddress(bank)
-    const serial = czoneSerial(bank)
+  function startCZoneEmulation (): void {
+    const bank = findCZoneBank()
+    if (!bank) return
+    const dipswitch = czoneDipswitch()
+    const src = czoneSrc()
+    const serial = czoneSerial()
     debug(
-      'czone emulation: bank=%d group=%d address=%d serial=%d',
+      'czone emulation: bank=%d dipswitch=%d address=%d serial=%d',
       bank.instance,
-      group,
+      dipswitch,
       src,
       serial
     )
-    const announce = bepFrame(
+    const announce = czoneFrame(
       CZONE_PGN_ANNOUNCE,
       src,
-      packAnnounce(serial, group)
+      packAnnounce(serial, dipswitch)
     )
     app.emit('nmea2000JsonOut', announce)
-    const desc = bepFrame(
-      CZONE_PGN_CIRCUIT_DESCRIPTOR,
-      src,
-      packCircuitDescriptor(group)
-    )
-    app.emit('nmea2000JsonOut', desc)
-    const interval = setInterval(
-      () => sendCZoneStatusFrames(bank),
-      CZONE_HEARTBEAT_MS
-    )
+    const interval = setInterval(() => sendCZoneState(bank), CZONE_HEARTBEAT_MS)
     onStop.push(() => clearInterval(interval))
   }
 
