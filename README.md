@@ -43,15 +43,17 @@ normal CZone configuration flow.
 
 ### Configuration
 
-Two pieces of configuration:
+Three per-bank fields, all under `banks[i]`:
 
-1. **Per-bank `czoneEnabled`** flag (under `banks[i]`) — set to `true`
-   on the one bank whose switches should appear under the CZone identity.
-   Up to six switches per bank are exposed (CZone modules are 6-circuit).
-2. **Top-level `czone`** block:
-   - `dipswitch` — eight-character binary string (e.g. `"00011000"`),
-     the same value you'd enter on the MFD's CZone settings page. Must
-     match the dipswitch your `.zcf` uses for this module.
+| Field | Default | Notes |
+|---|---|---|
+| `czoneEnabled` | `false` | Set to `true` to publish this bank as a CZone module. |
+| `czoneDipswitch` | `"00011000"` | Eight-character binary string, leftmost char = position 1 (bit 0). Must match the dipswitch the `.zcf` assigns to this module. Each enabled bank must use a distinct dipswitch. |
+| `czoneFirstCircuitId` | `13` | The first circuit id the `.zcf` gave this module. Switch 1 = this id, switch 2 = id+1, etc. The Yacht Devices YDAB-01 uses 13; configurations created from scratch in the CZone Configuration Tool can use any value. |
+
+Each enabled bank exposes up to six switches as one CZone module —
+that is the standard module size. Multiple enabled banks become
+multiple modules on the bus, each with its own dipswitch.
 
 ### What goes on the bus
 
@@ -65,10 +67,11 @@ When `czoneEnabled` is set on a bank and the plugin starts, it sends:
 | 65280 | RX | on command | MFD circuit-control command (on/off per circuit id) |
 | 65284 | RX | on query | MFD bitmap query (`27 99 C8 10 …` payload) |
 
-Inbound circuit-control commands map circuit id `0x0D + n` to switch
-`n + 1` of the enabled bank. The plugin writes `1` or `0` to that
-bank's switch path via `app.putSelfPath`, so a downstream plugin (relay
-driver, etc.) can turn the actual load on or off.
+Inbound circuit-control commands carry an absolute circuit id from the
+`.zcf`. The plugin subtracts the bank's `czoneFirstCircuitId` to get a
+0-based switch index, then writes `1` or `0` to the matching switch
+path via `app.putSelfPath`, so a downstream plugin (relay driver,
+etc.) can turn the actual load on or off.
 
 ### Dipswitch and `.zcf` matching
 
@@ -95,9 +98,32 @@ visibly switches to the new configuration once you upload it, which
 makes it obvious whether you're seeing the emulator or the old
 hardware.
 
+### Side-bar control on Navico displays
+
+To make the emulated switches appear on the Navico Control Bar (the
+side-bar on Zeus / NSS / GO), follow Navico's standard procedure for
+adding third-party Switch Bank Control devices to a CZone
+configuration:
+
+1. In the CZone Configuration Tool, open the **Advanced → Third-Party
+   Devices** tab and add a Switch Bank PGN Control entry. Pick a
+   Switch Bank supported module type (C1, MOI, OI, etc.), set a
+   unique Switch Bank Instance, and tick *Enable advanced CZone
+   remote control switch functions*.
+2. On the **Circuits** tab, add a Switch Bank circuit control to each
+   circuit you want the side-bar to drive (Switch Type:
+   Single Throw Momentary, Switch Output Function: Toggle).
+3. Write the updated configuration to the network.
+4. On the MFD, enable *Settings → System → Advanced → Digital
+   Switching* and CZone, then add the Control Bar to the side-bar
+   layout.
+
+The plugin itself is unchanged by this — it just publishes the
+module so the MFD can address it. All UI configuration happens in
+the CZone Configuration Tool.
+
 ### Limitations
 
-- One module (one dipswitch) per SignalK server.
 - Up to six switches per CZone-enabled bank — the standard CZone
   module size. Banks with more than six paths are still served as a
   normal NMEA 2000 switch bank, but only the first six surface under
