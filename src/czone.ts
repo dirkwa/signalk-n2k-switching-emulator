@@ -194,8 +194,14 @@ export function circuitIdToSwitchIndex (circuitId: number): number {
 
 /**
  * Parse a CZone dipswitch setting. Accepts the eight-position binary string
- * users enter on the plotter's CZone settings page, e.g. "00011000". A number
- * is accepted unchanged (its low 8 bits become the dipswitch value).
+ * users enter on the plotter's CZone settings page, e.g. "00011000".
+ *
+ * The plotter renders dipswitches with switch 1 on the left, so the leftmost
+ * character of the binary string is dipswitch position 1 (= bit 0). The byte
+ * sent on the wire is therefore the bit-reversed numeric value of the string
+ * read MSB-first.
+ *
+ * A number is accepted unchanged (its low 8 bits become the dipswitch byte).
  */
 export function parseDipswitch (input: unknown): number {
   if (typeof input === 'number' && Number.isFinite(input)) {
@@ -204,7 +210,11 @@ export function parseDipswitch (input: unknown): number {
   if (typeof input === 'string') {
     const cleaned = input.trim()
     if (/^[01]{8}$/.test(cleaned)) {
-      return parseInt(cleaned, 2)
+      let out = 0
+      for (let i = 0; i < 8; i++) {
+        if (cleaned[i] === '1') out |= 1 << i
+      }
+      return out
     }
   }
   return 0x18

@@ -15,11 +15,14 @@ import {
   parseDipswitch
 } from '../dist/czone.js'
 
-// dipswitch parsing: binary string preferred, integer accepted, fallback default
+// Dipswitch parsing follows the plotter UI convention: leftmost character
+// is dipswitch position 1 (bit 0). "00011000" thus sets bits 3 and 4 = 0x18.
 assert.equal(parseDipswitch('00011000'), 0x18)
-assert.equal(parseDipswitch('00010000'), 0x10)
+assert.equal(parseDipswitch('00010000'), 0x08, 'position 4 only -> bit 3')
+assert.equal(parseDipswitch('10000000'), 0x01, 'position 1 only -> bit 0')
+assert.equal(parseDipswitch('00000001'), 0x80, 'position 8 only -> bit 7')
 assert.equal(parseDipswitch('11111111'), 0xff)
-assert.equal(parseDipswitch(24), 24)
+assert.equal(parseDipswitch(24), 24, 'integers pass through unchanged')
 assert.equal(parseDipswitch(undefined), 0x18)
 assert.equal(parseDipswitch('not-a-pattern'), 0x18)
 
