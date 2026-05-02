@@ -98,6 +98,20 @@ visibly switches to the new configuration once you upload it, which
 makes it obvious whether you're seeing the emulator or the old
 hardware.
 
+### Finding the circuit IDs in your `.zcf`
+
+The plugin's `czoneFirstCircuitId` field has to match the first circuit id
+that your `.zcf` assigns to this module. The CZone Configuration Tool
+shows it on the **Circuits** tab, but if you'd rather not open the tool a
+small helper script is bundled with the plugin:
+
+```
+node tools/zcf-info.mjs path/to/your.zcf
+```
+
+It dumps each circuit's name and id and suggests a `czoneFirstCircuitId`
+value when the ids form a contiguous range.
+
 ### Side-bar control on Navico displays
 
 To make the emulated switches appear on the Navico Control Bar (the
