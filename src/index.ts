@@ -191,23 +191,24 @@ export default function (app: any) {
       }
 
       const onCZoneCircuitControl = (msg: any) => {
-        const bank = findCZoneBank()
-        if (!bank) return
         const result = parseCircuitControl(extractRawPayload(msg))
         if (!result) return
         const switchIndex = circuitIdToSwitchIndex(result.circuitId)
         if (switchIndex < 0) return
-        const path = bank.switches?.[switchIndex]
-        if (!path) return
-        debug(
-          'czone circuit %d -> switch %d path %s = %s',
-          result.circuitId,
-          switchIndex + 1,
-          path,
-          result.on ? 'on' : 'off'
-        )
-        app.putSelfPath(path, result.on ? 1 : 0)
-        sendCZoneState(bank)
+        czoneEnabledBanks().forEach((bank: any) => {
+          const path = bank.switches?.[switchIndex]
+          if (!path) return
+          debug(
+            'czone circuit %d -> bank %d switch %d path %s = %s',
+            result.circuitId,
+            bank.instance,
+            switchIndex + 1,
+            path,
+            result.on ? 'on' : 'off'
+          )
+          app.putSelfPath(path, result.on ? 1 : 0)
+          sendCZoneState(bank)
+        })
       }
 
       const n2kCallback = (msg: any) => {
@@ -218,8 +219,7 @@ export default function (app: any) {
           }
           if (msg.pgn == CZONE_PGN_CIRCUIT_BITMAP) {
             if (isCircuitStateQuery(extractRawPayload(msg))) {
-              const bank = findCZoneBank()
-              if (bank) sendCZoneState(bank)
+              czoneEnabledBanks().forEach((b: any) => sendCZoneState(b))
             }
             return
           }
@@ -395,27 +395,17 @@ export default function (app: any) {
                 },
                 czoneEnabled: {
                   type: 'boolean',
-                  title:
-                    'Expose this bank as the CZone module (configure CZone settings below)',
+                  title: 'Expose this bank as a CZone module on the bus',
                   default: false
+                },
+                czoneDipswitch: {
+                  type: 'string',
+                  title: 'CZone dipswitch (when CZone enabled)',
+                  description:
+                    'Eight-bit dipswitch as a binary string (the same value entered on the plotter\'s CZone settings page), e.g. "00011000". Each CZone-enabled bank must use a distinct dipswitch.',
+                  default: '00011000',
+                  pattern: '^[01]{8}$'
                 }
-              }
-            }
-          },
-          czone: {
-            type: 'object',
-            title:
-              'CZone emulation (publish a bank as a Navico CZone-compatible module)',
-            description:
-              'A CZone module is identified by a single dipswitch on the network. Enable on at most one bank above; all enabled banks share this configuration.',
-            properties: {
-              dipswitch: {
-                type: 'string',
-                title: 'Dipswitch',
-                description:
-                  'Eight-bit dipswitch as a binary string (the same value entered on the plotter\'s CZone settings page), e.g. "00011000".',
-                default: '00011000',
-                pattern: '^[01]{8}$'
               }
             }
           }
@@ -453,25 +443,29 @@ export default function (app: any) {
     return out
   }
 
-  function findCZoneBank (): any | undefined {
-    return props?.banks?.find(
-      (b: any) => b?.czoneEnabled && b.switches && b.switches.length
+  function czoneEnabledBanks (): any[] {
+    return (
+      props?.banks?.filter(
+        (b: any) => b?.czoneEnabled && b.switches && b.switches.length
+      ) ?? []
     )
   }
 
-  function czoneDipswitch (): number {
-    return parseDipswitch(props?.czone?.dipswitch)
+  function bankDipswitch (bank: any): number {
+    return parseDipswitch(bank?.czoneDipswitch)
   }
 
-  function czoneSerial (): number {
+  function bankSerial (bank: any): number {
     return deriveUniqueSerial(
-      app.config?.settings?.vesselUuid ?? app.config?.settings?.vesselMMSI
+      `${app.config?.settings?.vesselUuid ??
+        app.config?.settings?.vesselMMSI ??
+        'signalk'}#${bank.instance}`
     )
   }
 
   function sendCZoneState (bank: any): void {
     const switches = readBankSwitchStates(bank)
-    const dipswitch = czoneDipswitch()
+    const dipswitch = bankDipswitch(bank)
     const bitmap = czoneFrame(
       CZONE_PGN_CIRCUIT_BITMAP,
       packCircuitBitmap(dipswitch, switches)
@@ -488,23 +482,26 @@ export default function (app: any) {
   }
 
   function startCZoneEmulation (): void {
-    const bank = findCZoneBank()
-    if (!bank) return
-    const dipswitch = czoneDipswitch()
-    const serial = czoneSerial()
-    debug(
-      'czone emulation: bank=%d dipswitch=%d serial=%d',
-      bank.instance,
-      dipswitch,
-      serial
-    )
-    const announce = czoneFrame(
-      CZONE_PGN_ANNOUNCE,
-      packAnnounce(serial, dipswitch)
-    )
-    app.emit('nmea2000out', announce)
-    const interval = setInterval(() => sendCZoneState(bank), CZONE_HEARTBEAT_MS)
-    onStop.push(() => clearInterval(interval))
+    czoneEnabledBanks().forEach((bank: any) => {
+      const dipswitch = bankDipswitch(bank)
+      const serial = bankSerial(bank)
+      debug(
+        'czone emulation: bank=%d dipswitch=%d serial=%d',
+        bank.instance,
+        dipswitch,
+        serial
+      )
+      const announce = czoneFrame(
+        CZONE_PGN_ANNOUNCE,
+        packAnnounce(serial, dipswitch)
+      )
+      app.emit('nmea2000out', announce)
+      const interval = setInterval(
+        () => sendCZoneState(bank),
+        CZONE_HEARTBEAT_MS
+      )
+      onStop.push(() => clearInterval(interval))
+    })
   }
 
   function switchLabel (path: string): string {

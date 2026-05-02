@@ -69,10 +69,10 @@ plugin.start({
       instance: 0,
       sendRate: 0,
       switches: SWITCH_PATHS,
-      czoneEnabled: true
+      czoneEnabled: true,
+      czoneDipswitch: '00011000'
     }
-  ],
-  czone: { dipswitch: '00011000' }
+  ]
 })
 
 await new Promise((r) => setTimeout(r, 2200))
