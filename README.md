@@ -102,15 +102,67 @@ hardware.
 
 The plugin's `czoneFirstCircuitId` field has to match the first circuit id
 that your `.zcf` assigns to this module. The CZone Configuration Tool
-shows it on the **Circuits** tab, but if you'd rather not open the tool a
-small helper script is bundled with the plugin:
+shows it on the **Circuits** tab. If you'd rather not open the tool, the
+repository ships a small CLI that reads circuit info straight from the
+binary `.zcf`:
 
 ```
-node tools/zcf-info.mjs path/to/your.zcf
+node tools/zcf-info.mjs path/to/your.zcf [--strings]
 ```
 
-It dumps each circuit's name and id and suggests a `czoneFirstCircuitId`
-value when the ids form a contiguous range.
+Sample output for `Test.zcf`:
+
+```
+zcf:    /path/to/Test.zcf
+size:   781 bytes
+
+format version byte: 0x06
+
+circuit_id  name
+         1  Bilge Pump
+         2  Fridge
+         4  Freezer
+
+first circuit id: 1
+circuit ids are NOT contiguous (range 1..4, 3 circuits). The plugin's
+czoneFirstCircuitId expects a contiguous run; either reconfigure your
+.zcf so the circuits used by this module have sequential ids, or pick
+a starting id and accept that gaps map to "no switch".
+
+dipswitch: open the .zcf in the CZone Configuration Tool, click the
+Modules tab, and read the dipswitch from there. Convert it to the
+plugin's binary-string form by writing positions 1..8 as '1' (on) or
+'0' (off), leftmost = position 1.
+```
+
+What it does:
+
+- Lists every circuit by `(circuit_id, name)`.
+- Prints the first circuit id, suggesting it as `czoneFirstCircuitId`.
+- Warns when the circuit ids are not contiguous — the plugin maps a
+  bank's switches to consecutive circuit ids starting from
+  `czoneFirstCircuitId`, so non-contiguous ids need either a
+  reconfigured `.zcf` or padding the bank's `switches` array with
+  unused entries to skip the gaps.
+- Pass `--strings` to also dump every length-prefixed string the
+  scanner found in the file (useful for sanity-checking which `.zcf`
+  you're looking at).
+
+What it does not do:
+
+- It is a heuristic parser, not a full `.zcf` parser. The format is
+  proprietary and the tool relies on the typical layout that the CZone
+  Configuration Tool emits for small switching configurations. Files
+  with extensive HVAC, audio, modes, alarms or custom-PGN sections may
+  confuse it.
+- It does not extract the dipswitch — the tool tells you to read it
+  from the CZone Configuration Tool's Modules tab. Adding dipswitch
+  detection requires a deeper format walk than this scanner does.
+- It does not modify the `.zcf`.
+
+If the output looks wrong on your file, configure the plugin manually
+from the CZone Configuration Tool UI and (if you'd like) attach the
+`.zcf` to an issue so we can improve the heuristic.
 
 ### Side-bar control on Navico displays
 
