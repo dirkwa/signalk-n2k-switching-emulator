@@ -70,7 +70,8 @@ plugin.start({
       sendRate: 0,
       switches: SWITCH_PATHS,
       czoneEnabled: true,
-      czoneDipswitch: '00011000'
+      czoneDipswitch: '00011000',
+      czoneFirstCircuitId: 13
     }
   ]
 })
@@ -139,6 +140,7 @@ console.log('startup PGN set: OK')
 app.emitted.length = 0
 
 const cmdData = Buffer.from([0x27, 0x99, 0x0d, 0, 0, 0, 0xf1, 0])
+// Inbound PGN 65280 carrying circuit id 13 (YDAB first circuit) ON command.
 app.emit('N2KAnalyzerOut', {
   pgn: 65280,
   src: 5,
@@ -171,6 +173,7 @@ app.emit('N2KAnalyzerOut', {
   src: 5,
   fields: { Data: '0d 00 00 00 f2 00' }
 })
+
 await new Promise((r) => setTimeout(r, 20))
 assert.deepEqual(
   app.selfState[SWITCH_PATHS[0]],

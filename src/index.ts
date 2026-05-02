@@ -193,10 +193,14 @@ export default function (app: any) {
       const onCZoneCircuitControl = (msg: any) => {
         const result = parseCircuitControl(extractRawPayload(msg))
         if (!result) return
-        const switchIndex = circuitIdToSwitchIndex(result.circuitId)
-        if (switchIndex < 0) return
         czoneEnabledBanks().forEach((bank: any) => {
-          const path = bank.switches?.[switchIndex]
+          const switchIndex = circuitIdToSwitchIndex(
+            result.circuitId,
+            bankFirstCircuitId(bank),
+            bank.switches.length
+          )
+          if (switchIndex < 0) return
+          const path = bank.switches[switchIndex]
           if (!path) return
           debug(
             'czone circuit %d -> bank %d switch %d path %s = %s',
@@ -405,6 +409,15 @@ export default function (app: any) {
                     'Eight-bit dipswitch as a binary string (the same value entered on the plotter\'s CZone settings page), e.g. "00011000". Each CZone-enabled bank must use a distinct dipswitch.',
                   default: '00011000',
                   pattern: '^[01]{8}$'
+                },
+                czoneFirstCircuitId: {
+                  type: 'integer',
+                  title: 'First CZone circuit id (when CZone enabled)',
+                  description:
+                    'The first circuit id the .zcf assigned to this module. Switch 1 of this bank = this id, switch 2 = id+1, etc. Yacht Devices YDAB-01 uses 13.',
+                  default: 13,
+                  minimum: 1,
+                  maximum: 252
                 }
               }
             }
@@ -453,6 +466,11 @@ export default function (app: any) {
 
   function bankDipswitch (bank: any): number {
     return parseDipswitch(bank?.czoneDipswitch)
+  }
+
+  function bankFirstCircuitId (bank: any): number {
+    const v = bank?.czoneFirstCircuitId
+    return Number.isFinite(v) ? Number(v) : 13
   }
 
   function bankSerial (bank: any): number {

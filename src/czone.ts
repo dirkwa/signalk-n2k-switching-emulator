@@ -185,11 +185,17 @@ export function isCircuitStateQuery (
 }
 
 /**
- * Map a CZone circuitId (0x0D, 0x0E, ...) to a 0-based switch index.
+ * Map a CZone circuitId to a 0-based switch index given the first circuit id
+ * the bank's .zcf assigned. The Yacht Devices YDAB-01 uses 13 (= 0x0D); other
+ * configurations can start anywhere.
  */
-export function circuitIdToSwitchIndex (circuitId: number): number {
-  const i = circuitId - CZONE_FIRST_CIRCUIT_ID
-  return i >= 0 && i < CZONE_SUPPORTED_SWITCHES ? i : -1
+export function circuitIdToSwitchIndex (
+  circuitId: number,
+  firstCircuitId: number,
+  switchCount: number = CZONE_SUPPORTED_SWITCHES
+): number {
+  const i = circuitId - firstCircuitId
+  return i >= 0 && i < switchCount ? i : -1
 }
 
 /**

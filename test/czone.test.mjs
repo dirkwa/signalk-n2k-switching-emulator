@@ -73,11 +73,13 @@ assert.equal(parseCircuitControl(wrongHeader), undefined)
 const unknownCmd = Buffer.from([0x27, 0x99, 0x0d, 0, 0, 0, 0xaa, 0])
 assert.equal(parseCircuitControl(unknownCmd), undefined)
 
-// circuit id mapping
-assert.equal(circuitIdToSwitchIndex(0x0d), 0)
-assert.equal(circuitIdToSwitchIndex(0x0d + CZONE_SUPPORTED_SWITCHES - 1), CZONE_SUPPORTED_SWITCHES - 1)
-assert.equal(circuitIdToSwitchIndex(CZONE_FIRST_CIRCUIT_ID + CZONE_SUPPORTED_SWITCHES), -1)
-assert.equal(circuitIdToSwitchIndex(0x00), -1)
+// circuit id mapping is relative to the bank's configured firstCircuitId
+assert.equal(circuitIdToSwitchIndex(13, 13, 6), 0, 'YDAB default base')
+assert.equal(circuitIdToSwitchIndex(18, 13, 6), 5, 'YDAB last circuit')
+assert.equal(circuitIdToSwitchIndex(19, 13, 6), -1, 'past last circuit')
+assert.equal(circuitIdToSwitchIndex(7, 7, 6), 0, 'custom base 7 -> switch 1')
+assert.equal(circuitIdToSwitchIndex(12, 7, 6), 5, 'custom base 7 -> switch 6')
+assert.equal(circuitIdToSwitchIndex(0, 7, 6), -1, 'below custom base')
 
 // PGN 65284 query detection
 assert.equal(isCircuitStateQuery(Buffer.from([0x27, 0x99, 0xc8, 0x10])), true)
