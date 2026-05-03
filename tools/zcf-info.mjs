@@ -23,6 +23,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { parseZcf } from '../dist/zcfParser.js'
+
 const args = process.argv.slice(2)
 const showStrings = args.includes('--strings')
 const file = args.find((a) => !a.startsWith('--'))
@@ -41,50 +43,21 @@ console.log(`zcf:    ${path.resolve(file)}`)
 console.log(`size:   ${data.length} bytes`)
 console.log()
 
-const versionByte = data[0]
-console.log(`format version byte: 0x${versionByte.toString(16).padStart(2, '0')}`)
-if (versionByte !== 6) {
+const summary = parseZcf(data)
+
+console.log(
+  `format version byte: 0x${summary.versionByte.toString(16).padStart(2, '0')}`
+)
+if (summary.versionByte !== 6) {
   console.log(
     `  WARNING: this scanner has only been tested against version 6 files.`
   )
 }
 console.log()
 
-// Find length-prefixed printable-ASCII strings (length byte equals string
-// length, string is at least 3 chars). Returns [{offset, length, text}].
-function findLengthPrefixedStrings (buf) {
-  const out = []
-  for (let i = 1; i < buf.length; i++) {
-    const len = buf[i - 1]
-    if (len < 3 || len > 64) continue
-    if (i + len > buf.length) continue
-    let printable = true
-    for (let j = i; j < i + len; j++) {
-      const b = buf[j]
-      if (b < 32 || b > 126) {
-        printable = false
-        break
-      }
-    }
-    if (!printable) continue
-    // Reject runs that are part of a longer printable region (we want exact
-    // length match, so the byte after the run should not also be printable).
-    if (i + len < buf.length) {
-      const next = buf[i + len]
-      if (next >= 32 && next <= 126 && next !== 0) {
-        // Could still be a string with trailing printable; tolerate it.
-      }
-    }
-    out.push({ offset: i - 1, length: len, text: buf.slice(i, i + len).toString('ascii') })
-  }
-  return out
-}
-
-const strings = findLengthPrefixedStrings(data)
-
 if (showStrings) {
   console.log('strings found in file (offset, length, text):')
-  for (const s of strings) {
+  for (const s of summary.strings) {
     console.log(
       `  0x${s.offset.toString(16).padStart(4, '0')}  len=${String(s.length).padStart(2)}  ${s.text}`
     )
@@ -92,61 +65,31 @@ if (showStrings) {
   console.log()
 }
 
-// Loads ("outputChannels") and circuits sections both list the same names
-// — once each. Names appearing twice are circuit/channel pairs; names
-// appearing only once are something else (config name, module name, MFD,
-// switch-bank name, lighting zone, …).
-const counts = new Map()
-for (const s of strings) {
-  counts.set(s.text, (counts.get(s.text) || 0) + 1)
-}
-const repeatedNames = [...counts.entries()]
-  .filter(([, n]) => n >= 2)
-  .map(([name]) => name)
-
-
-// For each repeated name, the SECOND occurrence is the circuit record.
-// The 32-bit little-endian field that ends 1 byte before the length-prefix
-// is the circuit id. So if the length-prefix is at offset N, the circuit id
-// occupies bytes [N - 4, N).
-const circuits = []
-for (const name of repeatedNames) {
-  const occurrences = strings.filter((s) => s.text === name)
-  if (occurrences.length < 2) continue
-  const circuit = occurrences[1]
-  if (circuit.offset < 4) continue
-  const circuitId = data.readUInt32LE(circuit.offset - 4)
-  circuits.push({ name, circuitId })
-}
-
-if (circuits.length === 0) {
+if (summary.circuits.length === 0) {
   console.log(
-    'No repeated names found. This .zcf may not contain switchable circuits ' +
+    'No circuits found. This .zcf may not contain switchable circuits ' +
       'or its layout is one this scanner does not yet handle.'
   )
   process.exit(0)
 }
 
-circuits.sort((a, b) => a.circuitId - b.circuitId)
-
 console.log('circuit_id  name')
-for (const c of circuits) {
+for (const c of summary.circuits) {
   console.log(`  ${String(c.circuitId).padStart(8)}  ${c.name}`)
 }
 console.log()
 
-const firstId = circuits[0].circuitId
-const lastId = circuits[circuits.length - 1].circuitId
-const contiguous = lastId - firstId === circuits.length - 1
+const firstId = summary.firstCircuitId
+const lastId = summary.circuits[summary.circuits.length - 1].circuitId
 
 console.log(`first circuit id: ${firstId}`)
-if (contiguous) {
+if (summary.contiguous) {
   console.log(
     `circuit ids ${firstId}..${lastId} are contiguous — czoneFirstCircuitId: ${firstId}`
   )
 } else {
   console.log(
-    `circuit ids are NOT contiguous (range ${firstId}..${lastId}, ${circuits.length} circuits). ` +
+    `circuit ids are NOT contiguous (range ${firstId}..${lastId}, ${summary.circuits.length} circuits). ` +
       `The plugin's czoneFirstCircuitId expects a contiguous run; either reconfigure your ` +
       `.zcf so the circuits used by this module have sequential ids, or pick a starting id ` +
       `and accept that gaps map to "no switch".`

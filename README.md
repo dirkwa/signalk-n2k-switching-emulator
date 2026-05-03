@@ -101,14 +101,26 @@ hardware.
 ### Finding the circuit IDs in your `.zcf`
 
 The plugin's `czoneFirstCircuitId` field has to match the first circuit id
-that your `.zcf` assigns to this module. The CZone Configuration Tool
-shows it on the **Circuits** tab. If you'd rather not open the tool, the
-repository ships a small CLI that reads circuit info straight from the
-binary `.zcf`:
+that your `.zcf` assigns to this module. There are three ways to find it:
+
+1. **Open the `.zcf` in the CZone Configuration Tool** and read the values
+   off the Circuits tab.
+2. **Watch the bus.** When a Navico plotter loads a `.zcf` it broadcasts
+   the file as PGN 130816 chunks. The plugin reassembles those chunks,
+   saves the resulting `.zcf` to the plugin's data directory as
+   `last-czone.zcf`, parses out the circuit list, and logs it via the
+   plugin's debug channel and provider status. No upload UI required —
+   just have the plugin running while the plotter is loading or
+   distributing a `.zcf`.
+3. **Run the bundled CLI** on a `.zcf` you already have on disk:
 
 ```
 node tools/zcf-info.mjs path/to/your.zcf [--strings]
 ```
+
+The CLI uses the same parser as the runtime listener, so its output is
+identical to what the plugin would log when it sees the same `.zcf` on
+the bus.
 
 Sample output for `Test.zcf`:
 
