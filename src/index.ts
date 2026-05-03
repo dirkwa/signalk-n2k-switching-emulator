@@ -23,6 +23,8 @@ import {
   mapCamelCaseKeys
 } from '@canboat/ts-pgns'
 import { satisfies } from 'semver'
+import * as fs from 'fs'
+import * as path from 'path'
 import {
   circuitIdToSwitchIndex,
   CZONE_PGN_ANNOUNCE,
@@ -40,8 +42,11 @@ import {
   parseCircuitControl,
   parseDipswitch
 } from './czone'
+import { ZcfReassembler } from './zcfReassembler'
+import { parseZcf } from './zcfParser'
 
 const CZONE_HEARTBEAT_MS = 2000
+const CZONE_PGN_ZCF_TRANSFER = 130816
 
 export default function (app: any) {
   const error = app.error
@@ -215,8 +220,54 @@ export default function (app: any) {
         })
       }
 
+      const onZcfComplete = (src: number, zcf: Buffer) => {
+        const dataDir = app.getDataDirPath
+          ? app.getDataDirPath()
+          : path.join(__dirname, '..')
+        try {
+          fs.mkdirSync(dataDir, { recursive: true })
+          const out = path.join(dataDir, 'last-czone.zcf')
+          fs.writeFileSync(out, zcf)
+          debug('saved .zcf (%d bytes) from src=%d to %s', zcf.length, src, out)
+        } catch (e) {
+          debug('failed to persist .zcf: %s', e)
+        }
+        const summary = parseZcf(zcf)
+        if (summary.circuits.length === 0) {
+          debug('zcf parse: no circuits found')
+          return
+        }
+        debug(
+          'zcf parse: %d circuits, first=%d, contiguous=%s',
+          summary.circuits.length,
+          summary.firstCircuitId,
+          summary.contiguous
+        )
+        for (const c of summary.circuits) {
+          debug('  circuit %d  %s', c.circuitId, c.name)
+        }
+        if (app.setProviderStatus) {
+          const idStr = summary.contiguous
+            ? `id range ${summary.firstCircuitId}..${summary.firstCircuitId! +
+                summary.circuits.length -
+                1}`
+            : `ids ${summary.circuits.map(c => c.circuitId).join(',')}`
+          app.setProviderStatus(
+            `Saw .zcf from src=${src}: ${summary.circuits.length} circuits (${idStr})`
+          )
+        }
+      }
+      const zcfReassembler = new ZcfReassembler(onZcfComplete)
+
       const n2kCallback = (msg: any) => {
         try {
+          if (msg.pgn == CZONE_PGN_ZCF_TRANSFER) {
+            const payload = extractRawPayload(msg)
+            if (payload && msg.src !== undefined) {
+              zcfReassembler.ingest(msg.src, payload)
+            }
+            return
+          }
           if (msg.pgn == CZONE_PGN_CIRCUIT_CONTROL) {
             onCZoneCircuitControl(msg)
             return
