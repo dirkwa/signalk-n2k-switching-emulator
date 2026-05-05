@@ -16,6 +16,8 @@ const CZONE_HEADER_HI = 0x99
 export const CZONE_PGN_CIRCUIT_CONTROL = 65280 // inbound: MFD -> module commands
 export const CZONE_PGN_CIRCUIT_BITMAP = 65284 // outbound: state bitmap; inbound: query
 export const CZONE_PGN_ANNOUNCE = 65290 // outbound: one-shot announce
+export const CZONE_PGN_LABEL_QUERY = 65299 // inbound: plotter asks for a label
+export const CZONE_PGN_LABEL_REPLY = 130820 // outbound: label reply (fast packet)
 export const CZONE_PGN_STATUS_EXTENDED = 130817 // outbound: extended status (fast packet)
 
 export const CZONE_PGN_SWITCH_BANK_STATUS = 127501
@@ -156,6 +158,13 @@ export function packBinaryStatusReport (
 /**
  * Parse PGN 65280 inbound. Returns the circuit id and on/off command if the
  * payload is a CZone circuit-control command, or undefined otherwise.
+ *
+ * Frame layout (czone-spec/spec/pgn-65280.md):
+ *   bytes 0..1: CZone header (0x27 0x99)
+ *   bytes 2..3: circuit_id (uint16 LE)
+ *   bytes 4..5: field_b (uint16 LE, observed 0)
+ *   byte 6:    bit-packed; low nibble 0x1=ON, 0x2=OFF; bit 5=command_active
+ *   byte 7:    bit-packed flags (mostly unknown)
  */
 export function parseCircuitControl (
   payload: Buffer | number[] | undefined
@@ -163,9 +172,68 @@ export function parseCircuitControl (
   if (!payload || payload.length < 8) return undefined
   const p = Buffer.isBuffer(payload) ? payload : Buffer.from(payload)
   if (p[0] !== CZONE_HEADER_LO || p[1] !== CZONE_HEADER_HI) return undefined
-  const cmd = p[6]
-  if (cmd !== CZONE_COMMAND_ON && cmd !== CZONE_COMMAND_OFF) return undefined
-  return { circuitId: p[2], on: cmd === CZONE_COMMAND_ON }
+  const circuitId = p[2] | (p[3] << 8)
+  const lowNibble = p[6] & 0x0f
+  if (lowNibble !== 0x01 && lowNibble !== 0x02) return undefined
+  return { circuitId, on: lowNibble === 0x01 }
+}
+
+/**
+ * Parse PGN 65299 inbound — a label-enumeration query from the plotter.
+ * Frame layout (czone-spec/spec/pgn-65299.md):
+ *   bytes 0..1: CZone header
+ *   byte 2:    dipswitch of the target module
+ *   bytes 3..4: (instance, sub_instance) — present when query_type == 0
+ *   byte 5:    query_type byte (0x80 = controller label, 0x87 = system name)
+ *   bytes 6..7: padding (typically 0xff)
+ *
+ * The byte-position interpretation here matches the spec's inferred layout;
+ * see the open question at the end of pgn-65299.md.
+ */
+export function parseLabelQuery (
+  payload: Buffer | number[] | undefined
+):
+  | {
+      dipswitch: number
+      instance: number
+      subInstance: number
+      queryType: number
+    }
+  | undefined {
+  if (!payload || payload.length < 8) return undefined
+  const p = Buffer.isBuffer(payload) ? payload : Buffer.from(payload)
+  if (p[0] !== CZONE_HEADER_LO || p[1] !== CZONE_HEADER_HI) return undefined
+  return {
+    dipswitch: p[2],
+    instance: p[3],
+    subInstance: p[4],
+    queryType: p[5]
+  }
+}
+
+/**
+ * Pack a PGN 130820 label reply payload (after the 2-byte CZone header).
+ * Frame layout (czone-spec/spec/pgn-130820.md):
+ *   byte 0:    query_type echoed from the 65299 that triggered the reply
+ *   bytes 1..2: index echoed from the 65299
+ *   bytes 3..N-1: ASCII label (no NUL terminator on the wire — the unpacker
+ *                  writes one after the loop)
+ *   byte N:    trailing 0x00
+ *
+ * The packer caps the label at 217 bytes.
+ */
+export function packLabelReply (
+  queryType: number,
+  index: number,
+  label: string
+): Buffer {
+  const labelBytes = Buffer.from(label, 'ascii').slice(0, 217)
+  const buf = Buffer.alloc(3 + labelBytes.length + 1)
+  buf[0] = queryType & 0xff
+  buf.writeUInt16LE(index & 0xffff, 1)
+  labelBytes.copy(buf, 3)
+  // trailing NUL (already zero from Buffer.alloc)
+  return buf
 }
 
 /**

@@ -30,6 +30,8 @@ import {
   CZONE_PGN_ANNOUNCE,
   CZONE_PGN_CIRCUIT_BITMAP,
   CZONE_PGN_CIRCUIT_CONTROL,
+  CZONE_PGN_LABEL_QUERY,
+  CZONE_PGN_LABEL_REPLY,
   CZONE_PGN_STATUS_EXTENDED,
   CZONE_SUPPORTED_SWITCHES,
   czoneFrame,
@@ -38,9 +40,11 @@ import {
   packAnnounce,
   packBinaryStatusReport,
   packCircuitBitmap,
+  packLabelReply,
   packStatusExtended,
   parseCircuitControl,
-  parseDipswitch
+  parseDipswitch,
+  parseLabelQuery
 } from './czone'
 import { ZcfReassembler } from './zcfReassembler'
 import { parseZcf } from './zcfParser'
@@ -220,6 +224,38 @@ export default function (app: any) {
         })
       }
 
+      const onCZoneLabelQuery = (msg: any) => {
+        const q = parseLabelQuery(extractRawPayload(msg))
+        if (!q) return
+        czoneEnabledBanks().forEach((bank: any) => {
+          if (q.dipswitch !== bankDipswitch(bank)) return
+          // queryType 0x80 = controller / group label (per-circuit), index
+          // identifies the circuit by (instance, sub_instance). We answer
+          // with the bank switch's display label.
+          // queryType 0x87 = system / module name (per-module), no index.
+          const replyIndex = (q.subInstance << 8) | q.instance
+          let label = ''
+          if (q.queryType === 0x87) {
+            label = bank.czoneModuleName || `bank ${bank.instance}`
+          } else {
+            const switchIndex = q.subInstance
+            const path = bank.switches?.[switchIndex]
+            label = path ? switchLabel(path) : ''
+          }
+          if (!label) return
+          const replyData = packLabelReply(q.queryType, replyIndex, label)
+          const reply = czoneFrame(CZONE_PGN_LABEL_REPLY, replyData)
+          debug(
+            'czone label query type=%d (instance=%d sub=%d) -> %s',
+            q.queryType,
+            q.instance,
+            q.subInstance,
+            JSON.stringify(label)
+          )
+          app.emit('nmea2000out', reply)
+        })
+      }
+
       const onZcfComplete = (src: number, zcf: Buffer) => {
         const dataDir = app.getDataDirPath
           ? app.getDataDirPath()
@@ -276,6 +312,10 @@ export default function (app: any) {
             if (isCircuitStateQuery(extractRawPayload(msg))) {
               czoneEnabledBanks().forEach((b: any) => sendCZoneState(b))
             }
+            return
+          }
+          if (msg.pgn == CZONE_PGN_LABEL_QUERY) {
+            onCZoneLabelQuery(msg)
             return
           }
           if (msg.pgn == 59904) {

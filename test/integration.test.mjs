@@ -182,5 +182,60 @@ assert.deepEqual(
 )
 console.log('inbound 65280 OFF -> switch 1 = 0: OK')
 
+// --- 16-bit circuit_id (high byte non-zero) ---
+// Restart the plugin with a bank whose first circuit id is 4096 (0x1000) so
+// we can verify the parser reads bytes 2..3 as a uint16 LE.
+plugin.stop()
+app.emitted.length = 0
+app.selfState = {}
+plugin.start({
+  banks: [
+    {
+      instance: 0,
+      sendRate: 0,
+      switches: SWITCH_PATHS,
+      czoneEnabled: true,
+      czoneDipswitch: '00011000',
+      czoneFirstCircuitId: 4096
+    }
+  ]
+})
+await new Promise((r) => setTimeout(r, 20))
+app.emit('N2KAnalyzerOut', {
+  pgn: 65280,
+  src: 5,
+  // circuit_id 4096 = 0x1000 LE = 00 10
+  fields: { Data: '00 10 00 00 f1 00' }
+})
+await new Promise((r) => setTimeout(r, 20))
+assert.deepEqual(
+  app.selfState[SWITCH_PATHS[0]],
+  { value: 1 },
+  '16-bit circuit_id 0x1000 -> switch 1 ON'
+)
+console.log('inbound 65280 with 16-bit circuit_id -> switch 1 = 1: OK')
+
+// --- 65299 label query gets a 130820 reply ---
+app.emitted.length = 0
+app.emit('N2KAnalyzerOut', {
+  pgn: 65299,
+  src: 5,
+  // dipswitch 0x18, instance 0, sub_instance 0, query_type 0x80 (controller label)
+  fields: { Data: '18 00 00 80 ff ff' }
+})
+await new Promise((r) => setTimeout(r, 20))
+const replies = app.emitted
+  .filter((e) => e.evt === 'nmea2000out' && typeof e.msg === 'string')
+  .map((e) => e.msg.split(','))
+  .filter((p) => p[2] === '130820')
+assert.ok(replies.length > 0, 'a 130820 reply was emitted for 65299 query')
+const reply = replies[0]
+const replyHex = reply.slice(6).join('').toLowerCase()
+// First 4 hex bytes after the timestamp/prio/pgn/src/dst/len header are the wire bytes:
+//   27 99 (CZone header) + 80 (query_type echo) + 00 00 (index = sub<<8 | instance)
+assert.equal(replyHex.slice(0, 4), '2799', '130820 has CZone header 27 99')
+assert.equal(replyHex.slice(4, 6), '80', '130820 echoes query_type 0x80')
+console.log('inbound 65299 -> 130820 label reply: OK')
+
 plugin.stop()
 console.log('\nintegration test: PASS')
