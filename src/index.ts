@@ -14,10 +14,17 @@
  */
 
 import {
+  PGN_60928,
+  PGN_126996,
   PGN_127502,
   PGN_127501,
   PGN_130060,
   PGN_126208_NmeaAcknowledgeGroupFunction,
+  ManufacturerCode,
+  DeviceFunction,
+  DeviceClass,
+  YesNo,
+  IndustryCode,
   GroupFunction,
   PgnErrorCode,
   mapCamelCaseKeys
@@ -252,7 +259,7 @@ export default function (app: any) {
             q.subInstance,
             JSON.stringify(label)
           )
-          app.emit('nmea2000out', reply)
+          sendFromBank(bank, reply)
         })
       }
 
@@ -295,6 +302,13 @@ export default function (app: any) {
       }
       const zcfReassembler = new ZcfReassembler(onZcfComplete)
 
+      // True when at least one bank has a DeviceEmulator attached; in
+      // that case the per-bank emulator.onPGN callback is the dispatch
+      // path for CZone proprietary PGNs. The server-wide listener
+      // skips them here to avoid double-dispatch.
+      const haveCZoneEmulators = (): boolean =>
+        czoneEnabledBanks().some((b: any) => b.czoneEmulator)
+
       const n2kCallback = (msg: any) => {
         try {
           if (msg.pgn == CZONE_PGN_ZCF_TRANSFER) {
@@ -304,18 +318,26 @@ export default function (app: any) {
             }
             return
           }
-          if (msg.pgn == CZONE_PGN_CIRCUIT_CONTROL) {
-            onCZoneCircuitControl(msg)
-            return
-          }
-          if (msg.pgn == CZONE_PGN_CIRCUIT_BITMAP) {
-            if (isCircuitStateQuery(extractRawPayload(msg))) {
-              czoneEnabledBanks().forEach((b: any) => sendCZoneState(b))
+          if (
+            msg.pgn == CZONE_PGN_CIRCUIT_CONTROL ||
+            msg.pgn == CZONE_PGN_CIRCUIT_BITMAP ||
+            msg.pgn == CZONE_PGN_LABEL_QUERY
+          ) {
+            if (haveCZoneEmulators()) {
+              // The per-bank emulator's onPGN callback handles these.
+              return
             }
-            return
-          }
-          if (msg.pgn == CZONE_PGN_LABEL_QUERY) {
-            onCZoneLabelQuery(msg)
+            // Fallback path (older canboatjs without DeviceEmulator):
+            // dispatch from the server-wide stream.
+            if (msg.pgn == CZONE_PGN_CIRCUIT_CONTROL) {
+              onCZoneCircuitControl(msg)
+            } else if (msg.pgn == CZONE_PGN_CIRCUIT_BITMAP) {
+              if (isCircuitStateQuery(extractRawPayload(msg))) {
+                czoneEnabledBanks().forEach((b: any) => sendCZoneState(b))
+              }
+            } else if (msg.pgn == CZONE_PGN_LABEL_QUERY) {
+              onCZoneLabelQuery(msg)
+            }
             return
           }
           if (msg.pgn == 59904) {
@@ -572,6 +594,24 @@ export default function (app: any) {
     )
   }
 
+  // Send a CZone-proprietary frame either through the bank's own
+  // DeviceEmulator (when canboatjsUtils exposed createEmulator and we've
+  // claimed a NAME-MFG=295 device for this bank) or, on older canboatjs
+  // versions without that API, by injecting an Actisense string via the
+  // `nmea2000out` event so the host CAN provider rewrites src to the
+  // server's claimed source.
+  //
+  // The emulator path is what the discovery spec actually requires
+  // (czone-spec/spec/discovery.md#the-mfg295-gate); the fallback exists
+  // only so the plugin keeps doing _something_ on older canboatjs.
+  function sendFromBank (bank: any, frame: string): void {
+    if (bank.czoneEmulator) {
+      bank.czoneEmulator.send(frame)
+    } else {
+      app.emit('nmea2000out', frame)
+    }
+  }
+
   function sendCZoneState (bank: any): void {
     const switches = readBankSwitchStates(bank)
     const dipswitch = bankDipswitch(bank)
@@ -580,14 +620,148 @@ export default function (app: any) {
       packCircuitBitmap(dipswitch, switches)
     )
     debug('sending czone 65284 %s', bitmap)
-    app.emit('nmea2000out', bitmap)
+    sendFromBank(bank, bitmap)
 
     const status = czoneFrame(
       CZONE_PGN_STATUS_EXTENDED,
       packStatusExtended(dipswitch, switches)
     )
     debug('sending czone 130817 %s', status)
-    app.emit('nmea2000out', status)
+    sendFromBank(bank, status)
+  }
+
+  function buildAddressClaim (bank: any): PGN_60928 {
+    return new PGN_60928({
+      uniqueNumber: bankSerial(bank),
+      manufacturerCode: ManufacturerCode.BepMarine,
+      deviceFunction: DeviceFunction.SwitchInterface,
+      deviceClass: DeviceClass.ElectricalDistribution,
+      deviceInstanceLower: 0,
+      deviceInstanceUpper: 0,
+      systemInstance: 0,
+      industryGroup: IndustryCode.Marine,
+      arbitraryAddressCapable: YesNo.Yes
+    })
+  }
+
+  function buildProductInfo (bank: any): PGN_126996 {
+    // productCode 8395 = COI = Combination Output Interface (per
+    // czone-spec/spec/discovery.md#recognised-product-ids). Picked as the
+    // closest match for "a generic 6-channel switch bank" until the spec
+    // identifies a better default.
+    return new PGN_126996({
+      nmea2000Version: 1300,
+      productCode: bank.czoneProductCode ?? 8395,
+      modelId: (bank.czoneModuleName || `signalk-czone-${bank.instance}`).slice(
+        0,
+        32
+      ),
+      softwareVersionCode: '1.0',
+      modelVersion: '1.0',
+      modelSerialCode: String(bankSerial(bank)).slice(0, 32),
+      certificationLevel: 0,
+      loadEquivalency: 1
+    })
+  }
+
+  function attachEmulatorToBank (bank: any, utils: any): void {
+    if (bank.czoneEmulator) return
+    const id = `signalk-n2k-switching-emulator/bank-${bank.instance}`
+    debug(
+      'creating CZone emulator for bank %d via canboatjsUtils id=%s',
+      bank.instance,
+      id
+    )
+    const emulator = utils.createEmulator(
+      id,
+      {},
+      buildAddressClaim(bank),
+      buildProductInfo(bank),
+      undefined
+    )
+    bank.czoneEmulator = emulator
+    onStop.push(() => {
+      try {
+        utils.removeEmulator(id)
+      } catch (e) {
+        debug('removeEmulator(%s) failed: %s', id, e)
+      }
+      delete bank.czoneEmulator
+    })
+    emulator.onPGN((pgn: any) => onCZonePGN(bank, pgn))
+    sendBankAnnounce(bank)
+  }
+
+  // Dispatch a CZone proprietary PGN that arrived on a specific bank's
+  // DeviceEmulator. The bank context is known statically (each bank
+  // owns one emulator) so we don't need to iterate every CZone-enabled
+  // bank like the server-wide n2kCallback does.
+  function onCZonePGN (bank: any, pgn: any): void {
+    if (!pgn) return
+    if (pgn.pgn === CZONE_PGN_CIRCUIT_CONTROL) {
+      const result = parseCircuitControl(extractRawPayload(pgn))
+      if (!result) return
+      const switchIndex = circuitIdToSwitchIndex(
+        result.circuitId,
+        bankFirstCircuitId(bank),
+        bank.switches.length
+      )
+      if (switchIndex < 0) return
+      const path = bank.switches[switchIndex]
+      if (!path) return
+      debug(
+        'czone circuit %d -> bank %d switch %d path %s = %s',
+        result.circuitId,
+        bank.instance,
+        switchIndex + 1,
+        path,
+        result.on ? 'on' : 'off'
+      )
+      app.putSelfPath(path, result.on ? 1 : 0)
+      sendCZoneState(bank)
+      return
+    }
+    if (pgn.pgn === CZONE_PGN_CIRCUIT_BITMAP) {
+      if (isCircuitStateQuery(extractRawPayload(pgn))) {
+        sendCZoneState(bank)
+      }
+      return
+    }
+    if (pgn.pgn === CZONE_PGN_LABEL_QUERY) {
+      const q = parseLabelQuery(extractRawPayload(pgn))
+      if (!q) return
+      if (q.dipswitch !== bankDipswitch(bank)) return
+      const replyIndex = (q.subInstance << 8) | q.instance
+      let label = ''
+      if (q.queryType === 0x87) {
+        label = bank.czoneModuleName || `bank ${bank.instance}`
+      } else {
+        const switchIndex = q.subInstance
+        const path = bank.switches?.[switchIndex]
+        label = path ? switchLabel(path) : ''
+      }
+      if (!label) return
+      const replyData = packLabelReply(q.queryType, replyIndex, label)
+      const reply = czoneFrame(CZONE_PGN_LABEL_REPLY, replyData)
+      debug(
+        'czone label query type=%d (instance=%d sub=%d) -> %s',
+        q.queryType,
+        q.instance,
+        q.subInstance,
+        JSON.stringify(label)
+      )
+      sendFromBank(bank, reply)
+    }
+  }
+
+  function sendBankAnnounce (bank: any): void {
+    const dipswitch = bankDipswitch(bank)
+    const serial = bankSerial(bank)
+    const announce = czoneFrame(
+      CZONE_PGN_ANNOUNCE,
+      packAnnounce(serial, dipswitch)
+    )
+    sendFromBank(bank, announce)
   }
 
   function startCZoneEmulation (): void {
@@ -600,17 +774,40 @@ export default function (app: any) {
         dipswitch,
         serial
       )
-      const announce = czoneFrame(
-        CZONE_PGN_ANNOUNCE,
-        packAnnounce(serial, dipswitch)
-      )
-      app.emit('nmea2000out', announce)
+      // If canboatjsUtils never arrives (older canboatjs without the
+      // DeviceEmulator API), the announce still goes out via the
+      // fallback path below; the plotter just won't gate it as MFG=295.
+      sendBankAnnounce(bank)
       const interval = setInterval(
         () => sendCZoneState(bank),
         CZONE_HEARTBEAT_MS
       )
       onStop.push(() => clearInterval(interval))
     })
+
+    // Subscribe to canboatjsUtils to get DeviceEmulator factory; when it
+    // arrives, attach a per-bank emulator that claims a NAME-MFG=295
+    // device on the bus. This is what the spec's MFG=295 gate requires
+    // (czone-spec/spec/discovery.md#the-mfg295-gate).
+    if (typeof app.onPropertyValues === 'function') {
+      app.onPropertyValues('canboatjsUtils', (history: any[]) => {
+        if (!history) return
+        for (const entry of history) {
+          if (!entry || !entry.value) continue
+          const utils = (entry.value as any).utils
+          if (!utils || !utils.supportsDeviceCreation) continue
+          czoneEnabledBanks().forEach((bank: any) =>
+            attachEmulatorToBank(bank, utils)
+          )
+        }
+      })
+    } else {
+      debug(
+        'app.onPropertyValues unavailable; falling back to nmea2000out path. ' +
+          'CZone main panel will not see MFG=295 in the address claim — ' +
+          'upgrade canboatjs to the version that exports createEmulator.'
+      )
+    }
   }
 
   function switchLabel (path: string): string {

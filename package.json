@@ -7,7 +7,7 @@
     "format": "prettier-standard 'src/*.ts'",
     "build": "tsc",
     "watch": "npm run build -- -w",
-    "test": "npm run build && node test/czone.test.mjs && node test/integration.test.mjs && node test/zcf.test.mjs",
+    "test": "npm run build && node test/czone.test.mjs && node test/integration.test.mjs && node test/zcf.test.mjs && node test/emulator.test.mjs",
     "create-release": "github-create-release --owner sbender9 --repository signalk-n2k-switching-emulator",
     "release": "git tag -d v$npm_package_version ; git tag v$npm_package_version && git push --tags && git push && npm run create-release"
   },
