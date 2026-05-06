@@ -29,7 +29,7 @@ import {
   PgnErrorCode,
   mapCamelCaseKeys
 } from '@canboat/ts-pgns'
-import { SimpleCan } from '@canboat/canboatjs'
+import { toPgn } from '@canboat/canboatjs'
 import { satisfies } from 'semver'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -488,13 +488,6 @@ export default function (app: any) {
         //title: plugin.name,
         type: 'object',
         properties: {
-          canDevice: {
-            type: 'string',
-            title: 'CAN interface',
-            description:
-              'SocketCAN interface name to bind the CZone-emulator devices to (e.g. "can0", "vcan0"). Each CZone-enabled bank claims its own NAME-MFG=295 source address on this interface, independent of any other CAN provider configured for the SignalK server.',
-            default: 'can0'
-          },
           banks: {
             title: 'Banks',
             type: 'array',
@@ -567,6 +560,20 @@ export default function (app: any) {
       }
       return buf
     }
+    // canboatjs has parsed the proprietary fields (e.g. circuit_id,
+    // levelOrValue) into msg.fields and dropped the catch-all `Data`.
+    // Round-trip back through the encoder to reconstruct the wire bytes
+    // so our spec-driven parsers (parseCircuitControl, parseLabelQuery,
+    // ...) see the same byte layout regardless of whether canboat ships
+    // a stub for the PGN or a fully-decoded definition.
+    if (msg?.fields && typeof msg.pgn === 'number') {
+      try {
+        const buf = toPgn(msg as any)
+        if (Buffer.isBuffer(buf)) return buf
+      } catch (e) {
+        debug('extractRawPayload toPgn failed for pgn %d: %s', msg.pgn, e)
+      }
+    }
     return undefined
   }
 
@@ -622,20 +629,19 @@ export default function (app: any) {
     )
   }
 
-  // Send a CZone-proprietary frame from this bank. Preferred path is the
-  // bank's own SimpleCan device, which has claimed a NAME-MFG=295 source
-  // address on the configured canDevice — that's what the discovery spec
-  // requires (czone-spec/spec/discovery.md#the-mfg295-gate).
+  // Send a CZone-proprietary frame either through the bank's own
+  // DeviceEmulator (when canboatjsUtils exposed createEmulator and we've
+  // claimed a NAME-MFG=295 device for this bank) or, on older canboatjs
+  // versions without that API, by injecting an Actisense string via the
+  // `nmea2000out` event so the host CAN provider rewrites src to the
+  // server's claimed source.
   //
-  // Fallback: if SimpleCan couldn't start (no canDevice, no socketcan, etc),
-  // emit via the SignalK `nmea2000out` event so the host's existing CAN
-  // provider (if any) carries the frame. The plotter won't gate it as
-  // MFG=295 since the host's source address has its own NAME, but the
-  // plugin keeps doing _something_ — and the test harness's FakeApp can
-  // observe these emits without needing a real CAN socket.
+  // The emulator path is what the discovery spec actually requires
+  // (czone-spec/spec/discovery.md#the-mfg295-gate); the fallback exists
+  // only so the plugin keeps doing _something_ on older canboatjs.
   function sendFromBank (bank: any, frame: string): void {
     if (bank.czoneEmulator) {
-      bank.czoneEmulator.sendPGN(frame)
+      bank.czoneEmulator.send(frame)
     } else {
       app.emit('nmea2000out', frame)
     }
@@ -699,67 +705,31 @@ export default function (app: any) {
     })
   }
 
-  // Bring up a SimpleCan-backed virtual N2K device for one CZone bank.
-  // SimpleCan opens its own socketcan socket on `canDevice`, claims a
-  // source address with NAME-MFG=295, and forwards every other frame on
-  // the bus into our messageCb. Each bank gets its own SimpleCan so they
-  // can claim independent N2K source addresses (matching the
-  // "Recommended architecture: two N2K device personas" sketch in
-  // czone-spec/spec/discovery.md).
-  function attachEmulatorToBank (bank: any, canDevice: string): void {
+  function attachEmulatorToBank (bank: any, utils: any): void {
     if (bank.czoneEmulator) return
     const id = `signalk-n2k-switching-emulator/bank-${bank.instance}`
-    debug('creating SimpleCan emulator for bank %d on %s', bank.instance, canDevice)
-    // Tests can override the SimpleCan implementation by setting
-    // `app._simpleCanFactory` to a factory that returns an object with
-    // `start()` and `sendPGN(msg)`. Production code uses the real
-    // canboatjs SimpleCan which opens a socketcan socket.
-    const SimpleCanCtor: any = (app as any)._simpleCanFactory ?? SimpleCan
-    const device: any = new SimpleCanCtor(
-      {
-        app,
-        canDevice,
-        providerId: id,
-        addressClaim: buildAddressClaim(bank),
-        productInfo: buildProductInfo(bank)
-      },
-      (msg: any) => {
-        // SimpleCan delivers raw single-frame messages: { pgn, length, data }
-        // where pgn = { src, dst, pgn, prio } and data is the 8-byte frame.
-        // Adapt to onCZonePGN's expected shape (.pgn / .src / .dst / .data).
-        if (!msg || !msg.pgn) return
-        onCZonePGN(bank, {
-          pgn: msg.pgn.pgn,
-          src: msg.pgn.src,
-          dst: msg.pgn.dst,
-          data: msg.data
-        })
-      }
+    debug(
+      'creating CZone emulator for bank %d via canboatjsUtils id=%s',
+      bank.instance,
+      id
     )
-    try {
-      device.start()
-      bank.czoneEmulator = device
-      onStop.push(() => {
-        try {
-          device.candevice?.stop?.()
-          device.channel?.stop?.()
-        } catch (e) {
-          debug('SimpleCan stop for bank %d failed: %s', bank.instance, e)
-        }
-        delete bank.czoneEmulator
-      })
-    } catch (e: any) {
-      // canDevice doesn't exist, no permission, etc. The plugin keeps
-      // running so that any non-CZone behaviours (PGN 127501 emission,
-      // ack/group-function handling) still work, and CZone PGNs fall back
-      // to nmea2000out emission without the MFG=295 source-address gate.
-      error(
-        `failed to start SimpleCan for bank ${bank.instance} on ${canDevice}: ${e?.message || e}`
-      )
-    }
-    // Send the announce regardless of whether SimpleCan started: if it did,
-    // it goes out via the MFG=295 socket; if it didn't, it goes via
-    // nmea2000out fallback so consumers see something.
+    const emulator = utils.createEmulator(
+      id,
+      {},
+      buildAddressClaim(bank),
+      buildProductInfo(bank),
+      undefined
+    )
+    bank.czoneEmulator = emulator
+    onStop.push(() => {
+      try {
+        utils.removeEmulator(id)
+      } catch (e) {
+        debug('removeEmulator(%s) failed: %s', id, e)
+      }
+      delete bank.czoneEmulator
+    })
+    emulator.onPGN((pgn: any) => onCZonePGN(bank, pgn))
     sendBankAnnounce(bank)
   }
 
@@ -840,27 +810,23 @@ export default function (app: any) {
   }
 
   function startCZoneEmulation (): void {
-    const canDevice = props?.canDevice ?? 'can0'
     czoneEnabledBanks().forEach((bank: any) => {
       const dipswitch = bankDipswitch(bank)
       const serial = bankSerial(bank)
       debug(
-        'czone emulation: bank=%d dipswitch=%d serial=%d canDevice=%s',
+        'czone emulation: bank=%d dipswitch=%d serial=%d',
         bank.instance,
         dipswitch,
-        serial,
-        canDevice
+        serial
       )
-      // Bring up a SimpleCan-backed virtual N2K device that claims its own
-      // NAME-MFG=295 source address (czone-spec/spec/discovery.md#the-mfg295-gate).
-      // SimpleCan starts immediately and synchronously claims an address
-      // on the configured canDevice, independent of the SignalK server's
-      // own canbus provider.
-      attachEmulatorToBank(bank, canDevice)
-      // Defensive: re-broadcast the announce a few times after startup so
-      // a plotter that booted slightly later still sees it. spec/pgn-65290.md
-      // doesn't mandate a cadence, but real CZone modules tolerate
-      // periodic re-announce and the bus chatter is negligible.
+      // The first announce goes out via the nmea2000out fallback; once
+      // canboatjsUtils arrives below, the bank's DeviceEmulator is
+      // attached and the next periodic announce uses the MFG=295 path.
+      sendBankAnnounce(bank)
+      // Defensive: re-broadcast PGN 65290 every 10 s so a plotter that
+      // joins the bus after the plugin starts still sees the announce.
+      // spec/pgn-65290.md doesn't mandate a cadence; real CZone modules
+      // tolerate periodic re-announce and the bus chatter is negligible.
       const announceInterval = setInterval(
         () => sendBankAnnounce(bank),
         CZONE_ANNOUNCE_MS
@@ -872,6 +838,30 @@ export default function (app: any) {
       )
       onStop.push(() => clearInterval(interval))
     })
+
+    // Subscribe to canboatjsUtils to get the DeviceEmulator factory; when
+    // it arrives, attach a per-bank emulator that claims a NAME-MFG=295
+    // device on the bus. This is what the spec's MFG=295 gate requires
+    // (czone-spec/spec/discovery.md#the-mfg295-gate).
+    if (typeof app.onPropertyValues === 'function') {
+      app.onPropertyValues('canboatjsUtils', (history: any[]) => {
+        if (!history) return
+        for (const entry of history) {
+          if (!entry || !entry.value) continue
+          const utils = (entry.value as any).utils
+          if (!utils || !utils.supportsDeviceCreation) continue
+          czoneEnabledBanks().forEach((bank: any) =>
+            attachEmulatorToBank(bank, utils)
+          )
+        }
+      })
+    } else {
+      debug(
+        'app.onPropertyValues unavailable; falling back to nmea2000out path. ' +
+          'CZone main panel will not see MFG=295 in the address claim — ' +
+          'upgrade canboatjs to the version that exports createEmulator.'
+      )
+    }
   }
 
   function switchLabel (path: string): string {
