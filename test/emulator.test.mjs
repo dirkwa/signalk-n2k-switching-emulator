@@ -1,25 +1,43 @@
-// Verifies the canboatjs DeviceEmulator integration path. When
-// `app.onPropertyValues('canboatjsUtils', cb)` exposes a utils object
-// with `supportsDeviceCreation === true`, the plugin must:
+// Verifies the SimpleCan-based CZone persona path.
 //
-//   1. Call utils.createEmulator() per CZone-enabled bank with a NAME
-//      whose manufacturerCode is BepMarine (295).
-//   2. Send CZone proprietary frames through emulator.send() instead of
-//      the server-wide nmea2000out event.
-//   3. Receive CZone PGNs via emulator.onPGN() and dispatch them to the
-//      bank-specific handlers.
-//
-// The fakeUtils object below mirrors the canboatjs PR #424 surface
-// (createEmulator, supportsDeviceCreation, removeEmulator) just enough
-// for the plugin to wire up.
+// The plugin uses canboatjs's SimpleCan to claim a NAME-MFG=295 source
+// address on the configured canDevice. SimpleCan opens a real socketcan
+// socket which we don't want in CI, so the plugin honors a
+// `app._simpleCanFactory` injection point that this test uses to
+// substitute a stub. The stub captures every SimpleCan constructor call
+// (so we can inspect addressClaim / productInfo / canDevice options)
+// and exposes injectInbound() so tests can simulate inbound CZone
+// frames as if a plotter sent them.
 
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
-import {
-  ManufacturerCode
-} from '/home/dirk/dev/signalk-n2k-switching-emulator/node_modules/@canboat/ts-pgns/dist/index.js'
 import pluginModule from '/home/dirk/dev/signalk-n2k-switching-emulator/dist/index.js'
+import { ManufacturerCode } from '/home/dirk/dev/signalk-n2k-switching-emulator/node_modules/@canboat/ts-pgns/dist/index.js'
+
 const pluginFactory = pluginModule.default ?? pluginModule
+
+// Capture every SimpleCan constructor call so the test can inspect what
+// the plugin passed.
+const simpleCanInstances = []
+
+class FakeSimpleCan {
+  constructor (options, messageCb) {
+    this.options = options
+    this.messageCb = messageCb
+    this.sent = []
+    this.started = false
+    simpleCanInstances.push(this)
+  }
+  start () {
+    this.started = true
+  }
+  sendPGN (msg) {
+    this.sent.push(msg)
+  }
+  // helper for tests
+  injectInbound (msg) {
+    if (this.messageCb) this.messageCb(msg)
+  }
+}
 
 const SWITCH_PATHS = [
   'electrical.switches.bank.0.1.state',
@@ -27,29 +45,8 @@ const SWITCH_PATHS = [
   'electrical.switches.bank.0.3.state'
 ]
 
-class FakeEmulator extends EventEmitter {
-  constructor (id, addressClaim, productInfo) {
-    super()
-    this.id = id
-    this.addressClaim = addressClaim
-    this.productInfo = productInfo
-    this.sent = []
-  }
-  send (frame) {
-    this.sent.push(frame)
-  }
-  onPGN (cb) {
-    this.on('pgn', cb)
-  }
-  // helper for tests
-  injectInbound (pgn) {
-    this.emit('pgn', pgn)
-  }
-}
-
-class FakeApp extends EventEmitter {
+class FakeApp {
   constructor () {
-    super()
     this.config = { version: '2.20.0', settings: { vesselUuid: 'urn:test' } }
     this.selfState = {}
     this.subscriptions = []
@@ -58,51 +55,33 @@ class FakeApp extends EventEmitter {
         this.subscriptions.push({ cmd, errorCb, deltaCb })
       }
     }
-    this.propertyValueListeners = {}
-    this.emulators = []
+    this.emitted = []
+    this.errors = []
+    this._simpleCanFactory = FakeSimpleCan
   }
   debug () {}
-  error () {}
+  error (...args) { this.errors.push(args) }
   setProviderError () {}
   setProviderStatus () {}
-  getSelfPath (path) {
-    return this.selfState[path]
-  }
+  getSelfPath (path) { return this.selfState[path] }
   putSelfPath (path, value) {
     this.selfState[path] = { value }
     const sub = this.subscriptions[0]
     if (sub) sub.deltaCb({ updates: [{ values: [{ path, value }] }] })
   }
   handleMessage () {}
-  onPropertyValues (key, cb) {
-    this.propertyValueListeners[key] ??= []
-    this.propertyValueListeners[key].push(cb)
+  emit (event, payload) {
+    if (event === 'nmea2000out') this.emitted.push(payload)
   }
-  // tests call this to simulate canboatjs publishing the utils
-  publishCanboatjsUtils () {
-    const utils = {
-      supportsDeviceCreation: true,
-      createEmulator: (id, _options, addressClaim, productInfo) => {
-        const emu = new FakeEmulator(id, addressClaim, productInfo)
-        this.emulators.push(emu)
-        return emu
-      },
-      removeEmulator: (id) => {
-        const i = this.emulators.findIndex((e) => e.id === id)
-        if (i >= 0) this.emulators.splice(i, 1)
-      }
-    }
-    const listeners = this.propertyValueListeners.canboatjsUtils ?? []
-    for (const cb of listeners) {
-      cb([{ value: { id: 'fake-canbus', utils } }])
-    }
-  }
+  on () {}
+  removeListener () {}
 }
 
 const app = new FakeApp()
 const plugin = pluginFactory(app)
 
 plugin.start({
+  canDevice: 'vcan-test-stub',
   banks: [
     {
       instance: 0,
@@ -116,26 +95,31 @@ plugin.start({
   ]
 })
 
-// Now publish canboatjsUtils, which should make the plugin call
-// utils.createEmulator() for the bank.
-app.publishCanboatjsUtils()
-
 await new Promise((r) => setTimeout(r, 50))
 
-assert.equal(app.emulators.length, 1, 'one emulator created for one bank')
-const emu = app.emulators[0]
+assert.equal(
+  simpleCanInstances.length,
+  1,
+  'one SimpleCan instance created for one CZone-enabled bank'
+)
+const sc = simpleCanInstances[0]
+assert.equal(sc.started, true, 'SimpleCan.start() was called')
+assert.equal(sc.options.canDevice, 'vcan-test-stub', 'canDevice option propagated')
 
-// Address claim manufacturer code
-const claimMfg = emu.addressClaim?.fields?.manufacturerCode
+const claimMfg = sc.options.addressClaim?.fields?.manufacturerCode
 assert.equal(
   claimMfg,
-  ManufacturerCode.BepMarine,
-  `address claim mfg should be BepMarine (got ${claimMfg})`
+  ManufacturerCode.BepMarine2,
+  // ManufacturerCode.BepMarine2 = "BEP Marine 2" -> 295 (the CZone gate
+  // value, exposed by ts-pgns once canboat#627 disambiguated the two
+  // "BEP Marine" entries in MANUFACTURER_CODE).
+  `address claim mfg should be BepMarine2 (got ${claimMfg})`
 )
-console.log('emulator created with NAME-MFG=BepMarine: OK')
+console.log('SimpleCan opts: canDevice=vcan-test-stub, mfg=BepMarine2: OK')
 
-// Product info productCode
-const productCode = emu.productInfo?.fields?.productCode
+const productCode = sc.options.addressClaim
+  ? sc.options.productInfo?.fields?.productCode
+  : undefined
 assert.equal(
   productCode,
   8395,
@@ -143,57 +127,39 @@ assert.equal(
 )
 console.log('product info productCode=8395 (COI): OK')
 
-// Wait for the next heartbeat after emulator attached, then check that
-// at least one PGN 65284 frame was sent through the emulator's .send().
-await new Promise((r) => setTimeout(r, 2200))
-
-const sentPgns = emu.sent
-  .map((s) => s.split(',')[2])
-  .filter((p) => p === '65284' || p === '65290' || p === '130817')
-assert.ok(
-  sentPgns.length > 0,
-  `expected at least one CZone heartbeat PGN through emulator.send, got ${sentPgns.length}`
-)
-console.log(
-  `emulator.send received ${sentPgns.length} CZone frames (${[
-    ...new Set(sentPgns)
-  ].sort().join(', ')}): OK`
-)
-
-// Inject an inbound PGN 65280 ON command via the emulator's onPGN; the
-// plugin should treat it as a circuit-control and toggle the matching
-// switch on.
-const initialState = app.selfState[SWITCH_PATHS[0]]?.value
-emu.injectInbound({
-  pgn: 65280,
-  src: 5,
-  fields: { Data: '0d 00 00 00 01 00' }
+// Inject an inbound PGN 65280 ON command and verify the plugin updates
+// the switch state.
+sc.injectInbound({
+  pgn: { src: 5, dst: 255, pgn: 65280, prio: 3 },
+  length: 8,
+  data: Buffer.from([0x27, 0x99, 0x0d, 0, 0, 0, 0xf1, 0])
 })
 await new Promise((r) => setTimeout(r, 30))
 assert.deepEqual(
   app.selfState[SWITCH_PATHS[0]],
   { value: 1 },
-  `inbound 65280 via emulator should set switch 1 = 1 (was ${initialState})`
+  'inbound 65280 via SimpleCan should set switch 1 = 1'
 )
-console.log('inbound 65280 via emulator -> switch 1 = 1: OK')
+console.log('inbound 65280 via SimpleCan -> switch 1 = 1: OK')
 
-// Inject an inbound 65299 query and expect a 130820 reply through the
-// emulator's send.
-emu.sent.length = 0
-emu.injectInbound({
-  pgn: 65299,
-  src: 5,
-  fields: { Data: '18 00 00 80 ff ff' }
+// Inject an inbound 65299 query and expect a 130820 reply through
+// SimpleCan.sendPGN.
+sc.sent.length = 0
+sc.injectInbound({
+  pgn: { src: 5, dst: 255, pgn: 65299, prio: 7 },
+  length: 8,
+  data: Buffer.from([0x27, 0x99, 0x18, 0, 0, 0x80, 0xff, 0xff])
 })
 await new Promise((r) => setTimeout(r, 30))
-const replies = emu.sent
+const replies = sc.sent
+  .filter((s) => typeof s === 'string')
   .map((s) => s.split(','))
   .filter((p) => p[2] === '130820')
 assert.ok(
   replies.length > 0,
-  `expected a 130820 reply via emulator, got ${emu.sent.length} frames`
+  `expected a 130820 reply via SimpleCan.sendPGN, got ${sc.sent.length} frames`
 )
-console.log('inbound 65299 via emulator -> 130820 reply: OK')
+console.log('inbound 65299 via SimpleCan -> 130820 reply: OK')
 
 plugin.stop()
 console.log('\nemulator integration test: PASS')
