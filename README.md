@@ -200,6 +200,67 @@ The plugin itself is unchanged by this — it just publishes the
 module so the MFD can address it. All UI configuration happens in
 the CZone Configuration Tool.
 
+#### Verifying the side-bar without an MFD
+
+The side-bar surface uses two standard NMEA 2000 PGNs that are
+independent of the CZone MFG=295 gate:
+
+- PGN 127501 (Binary Status Report) — current on/off state
+- PGN 130060 (Suggested Metadata) — per-switch labels
+
+Either listen for them on the bus directly, or run the
+[czone-spec stubplotter](https://github.com/dirkwa/czone-spec/tree/main/stubplotter)
+rig — its `switchbank_status_present` and `sidebar_labels_present`
+tests pass when these two PGNs appear within their windows. The rig
+ships a `make smoke` target that drives a fresh signalk-server +
+this plugin against vcan and reports pass/fail per spec rule.
+
+### Pushing a `.zcf` from the plugin (experimental)
+
+When the plugin is enabled with `czoneZcfPushEnabled: true`, it
+exposes a SignalK PUT endpoint at `electrical.czone.pushZcf` that
+broadcasts a `.zcf` to the bus as PGN 130816 fast-packet sequences
+(N×200 bytes + optional partial chunk + zero-byte terminator,
+matching what a real Zeus 3S plotter does per
+`czone-spec/spec/pgn-130816.md` "Frame layout"). The frames go out
+from the first CZone-enabled bank's source address.
+
+This is intended for testing — driving the plugin's own
+PGN 130816 reassembler from another node, populating a stubplotter
+listener with a known `.zcf`, or feeding a development MFD without
+the SD-card / USB upload dance. Whether a real plotter accepts a
+non-plotter-originated `.zcf` as a config replacement has not been
+pinned down by the spec; expect that production plotters reject
+it. **Default is off.**
+
+How to use it:
+
+1. In the plugin settings, tick **Enable .zcf push to the CZone
+   bus (experimental)**.
+2. Base64-encode your `.zcf`:
+
+   ```bash
+   base64 -w0 path/to/your.zcf > zcf.b64
+   ```
+
+3. Issue a SignalK PUT against `vessels.self` with the path
+   `electrical.czone.pushZcf`:
+
+   ```bash
+   curl -X PUT \
+     -H 'Content-Type: application/json' \
+     -d "{\"value\": \"$(cat zcf.b64)\"}" \
+     http://localhost:3000/signalk/v1/api/vessels/self/electrical/czone/pushZcf
+   ```
+
+   (Add the appropriate auth headers if your server requires them.)
+
+The handler validates that the payload looks like a `.zcf`
+(non-empty, length-prefixed strings present), then chunks and
+broadcasts it. The response carries `state: "COMPLETED"` plus a
+status code: 200 on success, 400 on a malformed payload, 403 when
+the toggle is off, 500 if no CZone-enabled bank is configured.
+
 ### Limitations
 
 - Up to six switches per CZone-enabled bank — the standard CZone

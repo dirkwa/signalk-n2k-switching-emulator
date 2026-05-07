@@ -34,6 +34,7 @@ import { satisfies } from 'semver'
 import * as fs from 'fs'
 import * as path from 'path'
 import {
+  chunkZcf,
   circuitIdToSwitchIndex,
   CZONE_PGN_ANNOUNCE,
   CZONE_PGN_CIRCUIT_BITMAP,
@@ -63,6 +64,9 @@ const CZONE_HEARTBEAT_MS = 2000
 // doesn't mandate a cadence — this is defensive correctness.
 const CZONE_ANNOUNCE_MS = 10000
 const CZONE_PGN_ZCF_TRANSFER = 130816
+// SignalK PUT path that triggers a .zcf push when czoneZcfPushEnabled is true.
+// The PUT value carries the .zcf as a base64 string.
+const CZONE_ZCF_PUSH_PATH = 'electrical.czone.pushZcf'
 
 export default function (app: any) {
   const error = app.error?.bind(app) ?? ((...args: any[]) => console.error(...args))
@@ -442,6 +446,8 @@ export default function (app: any) {
       app.on('N2KAnalyzerOut', n2kCallback)
       onStop.push(() => app.removeListener('N2KAnalyzerOut', n2kCallback))
 
+      registerZcfPushHandler()
+
       const labelTimer = setTimeout(() => {
         props.banks?.forEach((bank: any) => {
           if (bank.switches && bank.switches.length) {
@@ -488,6 +494,19 @@ export default function (app: any) {
         //title: plugin.name,
         type: 'object',
         properties: {
+          czoneZcfPushEnabled: {
+            type: 'boolean',
+            title: 'Enable .zcf push to the CZone bus (experimental)',
+            description:
+              'When enabled, the plugin can push a .zcf file to the bus via PGN 130816 ' +
+              'fast-packet sequences from the first CZone-enabled bank\'s source address. ' +
+              'Trigger with a SignalK PUT to electrical.czone.pushZcf carrying ' +
+              '{ "value": "<base64 of .zcf>" } in the request body. ' +
+              'Real CZone modules and plotters listening on PGN 130816 will receive the ' +
+              'broadcast; whether a real plotter accepts a non-plotter-originated .zcf as ' +
+              'a config replacement is not yet pinned down by czone-spec. Default off.',
+            default: false
+          },
           banks: {
             title: 'Banks',
             type: 'array',
@@ -838,6 +857,99 @@ export default function (app: any) {
       )
       sendFromBank(bank, reply)
     }
+  }
+
+  // Push a full .zcf onto the bus as a sequence of PGN 130816 fast-packet
+  // frames from the first CZone-enabled bank's source address. Mirrors what
+  // a Zeus 3S plotter does when distributing a config — see
+  // czone-spec/spec/pgn-130816.md "Frame layout" and the captures referenced
+  // there. Gated on `props.czoneZcfPushEnabled`; the PUT handler refuses
+  // when the toggle is off so this stays opt-in.
+  function pushZcfToBus (zcf: Buffer): { chunks: number; bank: any } {
+    const banks = czoneEnabledBanks()
+    if (banks.length === 0) {
+      throw new Error('no CZone-enabled bank to push from')
+    }
+    const bank = banks[0]
+    const chunks = chunkZcf(zcf)
+    for (const c of chunks) {
+      const frame = czoneFrame(CZONE_PGN_ZCF_TRANSFER, c.payload)
+      sendFromBank(bank, frame)
+    }
+    return { chunks: chunks.length, bank }
+  }
+
+  // SignalK PUT handler on `electrical.czone.pushZcf`. Body shape:
+  //   { "value": "<base64 of .zcf>" }
+  // Returns a SignalK ActionResult-compatible object.
+  function registerZcfPushHandler (): void {
+    if (typeof app.registerPutHandler !== 'function') {
+      debug('app.registerPutHandler unavailable; .zcf push disabled')
+      return
+    }
+    app.registerPutHandler(
+      'vessels.self',
+      CZONE_ZCF_PUSH_PATH,
+      (_context: string, _path: string, value: any, _callback?: any) => {
+        if (!props?.czoneZcfPushEnabled) {
+          return {
+            state: 'COMPLETED',
+            statusCode: 403,
+            message:
+              'czoneZcfPushEnabled is false — enable it in plugin settings'
+          }
+        }
+        if (typeof value !== 'string' || value.length === 0) {
+          return {
+            state: 'COMPLETED',
+            statusCode: 400,
+            message: 'PUT value must be a non-empty base64 string'
+          }
+        }
+        let zcf: Buffer
+        try {
+          zcf = Buffer.from(value, 'base64')
+        } catch (e) {
+          return {
+            state: 'COMPLETED',
+            statusCode: 400,
+            message: `base64 decode failed: ${e}`
+          }
+        }
+        // Sanity-check the .zcf header. parseZcf returns at least an empty
+        // circuit list on garbage input, so use it as a soft validator: a
+        // file with zero strings is almost certainly not a real .zcf.
+        const summary = parseZcf(zcf)
+        if (zcf.length < 32 || summary.strings.length === 0) {
+          return {
+            state: 'COMPLETED',
+            statusCode: 400,
+            message: `payload (${zcf.length} bytes) does not look like a .zcf`
+          }
+        }
+        try {
+          const { chunks, bank } = pushZcfToBus(zcf)
+          debug(
+            'pushed .zcf (%d bytes) as %d chunks from bank %d',
+            zcf.length,
+            chunks,
+            bank.instance
+          )
+          return {
+            state: 'COMPLETED',
+            statusCode: 200,
+            message: `pushed ${zcf.length} bytes as ${chunks} chunks`
+          }
+        } catch (e: any) {
+          error(e)
+          return {
+            state: 'COMPLETED',
+            statusCode: 500,
+            message: e?.message ?? String(e)
+          }
+        }
+      }
+    )
   }
 
   function sendBankAnnounce (bank: any): void {

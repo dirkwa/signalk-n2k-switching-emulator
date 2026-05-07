@@ -86,6 +86,69 @@ export function packAnnounce (uniqueSerial: number, dipswitch: number): Buffer {
 }
 
 /**
+ * Maximum bytes of `.zcf` data per PGN 130816 chunk. Per
+ * czone-spec/spec/pgn-130816.md "Each non-terminal chunk carries
+ * exactly 200 bytes of .zcf data."
+ */
+export const CZONE_ZCF_CHUNK_DATA_MAX = 200
+
+/**
+ * PGN 130816 (`.zcf` bus distribution) chunk payload after the 2-byte
+ * CZone manufacturer header. Layout per czone-spec/spec/pgn-130816.md:
+ *
+ *   bytes 0..1  chunk_idx (u16 LE)
+ *   byte 2      flag (observed = 0x01)
+ *   bytes 3..20 reserved (18 zero bytes)
+ *   bytes 21..  up to 200 bytes of .zcf data
+ *
+ * Returns a Buffer of length `21 + data.length`. The receiver
+ * reassembles by concatenating the data slices in chunk_idx order.
+ */
+export function packZcfChunk (chunkIdx: number, data: Buffer): Buffer {
+  if (data.length > CZONE_ZCF_CHUNK_DATA_MAX) {
+    throw new Error(
+      `zcf chunk data must be <= ${CZONE_ZCF_CHUNK_DATA_MAX} bytes (got ${data.length})`
+    )
+  }
+  const payload = Buffer.alloc(21 + data.length)
+  payload.writeUInt16LE(chunkIdx & 0xffff, 0)
+  payload.writeUInt8(0x01, 2) // flag
+  // bytes 3..20 are reserved zero (already zero from Buffer.alloc).
+  data.copy(payload, 21)
+  return payload
+}
+
+/**
+ * Split a full `.zcf` file into the PGN 130816 chunks a Zeus 3S
+ * broadcasts on the wire. czone-spec/captures/130816.log shows the
+ * pattern: N full 200-byte chunks, optionally followed by one short
+ * chunk, followed by an explicit zero-byte terminator chunk.
+ *
+ * Returns a list of `{ chunkIdx, payload }` objects ready to be wrapped
+ * by `czoneFrame(130816, payload)` and emitted onto the bus.
+ */
+export function chunkZcf (zcf: Buffer): Array<{ chunkIdx: number; payload: Buffer }> {
+  const chunks: Array<{ chunkIdx: number; payload: Buffer }> = []
+  let offset = 0
+  let chunkIdx = 0
+  while (offset + CZONE_ZCF_CHUNK_DATA_MAX <= zcf.length) {
+    chunks.push({
+      chunkIdx,
+      payload: packZcfChunk(chunkIdx, zcf.slice(offset, offset + CZONE_ZCF_CHUNK_DATA_MAX))
+    })
+    offset += CZONE_ZCF_CHUNK_DATA_MAX
+    chunkIdx += 1
+  }
+  if (offset < zcf.length) {
+    chunks.push({ chunkIdx, payload: packZcfChunk(chunkIdx, zcf.slice(offset)) })
+    chunkIdx += 1
+  }
+  // Explicit zero-byte terminator chunk.
+  chunks.push({ chunkIdx, payload: packZcfChunk(chunkIdx, Buffer.alloc(0)) })
+  return chunks
+}
+
+/**
  * PGN 130817 (Status Extended) payload after the 2-byte CZone header. Carries
  * a state-page identifier, the dipswitch, and one 3-byte analog record per
  * switch. The record layout is `[state, secondary, flag]`; the meaningful
