@@ -235,12 +235,20 @@ What gets put in the file:
 - **config name** = `czoneConfigName` (defaults to
   `SignalK Switching <instance>`)
 - **two module records**:
-  1. an **Output Interface** (or **C6 / Combination Output
-     Interface**, depending on `czoneModuleType`) =
-     `(czoneDipswitch, czoneModuleName)`. The default is `oi`
-     which sets the type code `m1=0x0f` (DC1..DC6 outputs); pick
-     `coi` for `m1=0x09` (C1..C6 outputs, matching the C6
-     hardware) or `cxp` for `m1=0x36` (13 outputs).
+  1. an **Output Interface** (or **Combination Output Interface /
+     Contact 6 / CXP**, depending on `czoneModuleType`) =
+     `(czoneDipswitch, czoneModuleName)`. Pick the type matching
+     your real hardware (look at the part-number sticker
+     `80-911-NNNN-NN` on the module):
+     - `oi` (default) — Output Interface, 6 outputs DC1..DC6
+       (parts 80-911-0009-00 / -0010-00). `m1=0x0f`.
+     - `coi` — modern Combination Output Interface, **16 outputs**
+       (4 high-current DC1..DC4 + 12 dimmable DC5..DC16, 150A
+       max). Part 80-911-0119-00. `m1=0x1c`.
+     - `contact6` — Contact 6 / Contact 6 Plus dry-contact
+       module, 6 outputs C1..C6. Parts 80-911-0140-00 /
+       -0160-00. `m1=0x09`.
+     - `cxp` — CXP load module, 13 outputs. `m1=0x36`.
   2. a **Display Interface** record (`m1=0x10`) carried over from
      the bundled template. The Configuration Tool's "Module
      Configuration" tree shows both, and the per-circuit

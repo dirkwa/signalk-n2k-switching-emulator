@@ -632,8 +632,8 @@ export default function (app: any) {
                   type: 'string',
                   title: 'CZone module type',
                   description:
-                    'Which kind of module the CZone Configuration Tool should render this bank as. "oi" = Output Interface (DC1..DC6 outputs, the default). "coi" = Combination Output Interface, also known as C6 (outputs labelled C1..C6). "cxp" = larger CXP load module (13 outputs). Pick the one matching your real hardware.',
-                  enum: ['oi', 'coi', 'cxp'],
+                    'Which kind of module the CZone Configuration Tool should render this bank as. Pick the one matching your real hardware (look at the part-number sticker on your module). "oi" = Output Interface, 80-911-0009-00 / -0010-00, 6 outputs DC1..DC6 (the default). "coi" = Combination Output Interface, 80-911-0119-00, 16 outputs (4 x 25A DC1..DC4 + 12 x 10A dimmable DC5..DC16). "contact6" = Contact 6 / Contact 6 Plus, 80-911-0140-00 / -0160-00, 6 dry-contact outputs C1..C6. "cxp" = larger CXP load module, 13 outputs.',
+                  enum: ['oi', 'coi', 'contact6', 'cxp'],
                   default: 'oi'
                 },
                 czoneSubCategories: {
@@ -1002,10 +1002,26 @@ export default function (app: any) {
     const moduleName = bank.czoneModuleName || `SignalK Bank ${bank.instance}`
     const subCats = (bank.czoneSubCategories as string[]) ?? []
     // typeCode picks how the Configuration Tool labels the module's
-    // outputs: 'oi' (the default 6-DC Output Interface), 'coi' (the
-    // C6 / Combination Output Interface, outputs labelled C1..C6).
+    // outputs:
+    //   'oi'      -> m1=0x0f, the standard Output Interface
+    //                (80-911-0009-00 / -0010-00, 6 outputs DC1..DC6)
+    //   'coi'     -> m1=0x1c, the modern Combination Output Interface
+    //                (80-911-0119-00, 16 outputs: 4 high-current
+    //                DC1..DC4 + 12 dimmable DC5..DC16, 150A max)
+    //   'contact6'-> m1=0x09, the Contact 6 / Contact 6 Plus family
+    //                (80-911-0140-00 / -0160-00, 6 dry-contact
+    //                outputs C1..C6)
+    //   'cxp'     -> m1=0x36, a CXP load module variant (13 outputs;
+    //                seen in Compass Rose corpus as 'Engine Room CXP'
+    //                and 'Helm CXP')
+    // Verified against czone.navico.com product specs and the
+    // Configuration Tool's GetChannelString switch.
     const typeKey = (bank.czoneModuleType as string) || 'oi'
-    const typeCode = typeKey === 'coi' ? 0x09 : typeKey === 'cxp' ? 0x36 : 0x0f
+    const typeCode =
+      typeKey === 'coi' ? 0x1c :
+      typeKey === 'contact6' ? 0x09 :
+      typeKey === 'cxp' ? 0x36 :
+      0x0f
     const spec: ZcfGenSpec = {
       configName: bank.czoneConfigName || `SignalK Switching ${bank.instance}`,
       module: { dipswitch, name: moduleName, typeCode },

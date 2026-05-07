@@ -734,14 +734,18 @@ export interface ZcfGenSpec {
  * with non-empty placeholder circuits.
  *
  * Values verified against the Configuration Tool's GetChannelString()
- * switch in frmZoneSystemConfigurationTool.cs:
- *   m1=0x09 ( 9) = "C" prefix module (C1..C6) -- this is the C6 hardware
- *                  ("Combination Output Interface", aka COI). 6 outputs.
- *   m1=0x0f (15) = DC output module (DC1..DC6). 6 outputs.
+ * switch in frmZoneSystemConfigurationTool.cs and cross-checked
+ * against czone.navico.com product specs:
+ *   m1=0x09 ( 9) = Contact 6 / Contact 6 Plus family. 6 dry-contact
+ *                  outputs labelled C1..C6 (80-911-0140-00 / -0160-00).
+ *   m1=0x0f (15) = Output Interface. 6 outputs DC1..DC6
+ *                  (80-911-0009-00 / -0010-00).
  *   m1=0x10 (16) = Display Interface / MFD / Chartplotter. No outputs.
- *   m1=0x1c (28) = DC + Input module (paralleled). 16 outputs.
- *   m1=0x1d (29) = Keypad / Switch input module. 32 inputs (not outputs).
- *   m1=0x1f (31) = DC + Input module (paralleled). 16 outputs.
+ *   m1=0x1c (28) = Combination Output Interface (modern). 16 outputs
+ *                  (4 x 25A high-current DC1..DC4 + 12 x 10A dimmable
+ *                  DC5..DC16, 150A max). 80-911-0119-00.
+ *   m1=0x1d (29) = Keypad / Switch input module. 32 inputs.
+ *   m1=0x1f (31) = COI variant (also 16 outputs, same DC1..DC16 layout).
  *   m1=0x36 (54) = CXP module. 13 outputs (per Compass Rose corpus).
  */
 const MODULE_TYPE_OUTPUT_COUNT: { [key: number]: number } = {

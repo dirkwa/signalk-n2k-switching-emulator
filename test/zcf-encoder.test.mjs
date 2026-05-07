@@ -303,20 +303,43 @@ for (const ckt of sidebarParsed.body.circuits.records) {
 console.log(`generator: every circuit has leading wildcard output + Display Interface module preserved: OK`)
 
 // Module type override: spec.module.typeCode rewrites the module's
-// module_specific_value byte. C6 hardware uses m1=0x09 (the
-// Configuration Tool labels its outputs C1..C6). Verify the override
-// lands in the encoded file.
-const c6Spec = {
-  configName: 'C6 Test',
-  module: { dipswitch: 0x18, name: 'C6 Module', typeCode: 0x09 },
+// module_specific_value byte. Two distinct CZone hardware families
+// share C-prefix labels but have very different output counts:
+//   m1=0x09 (Contact 6 / Contact 6 Plus, 80-911-0140-00 / -0160-00)
+//          -- 6 dry-contact outputs C1..C6.
+//   m1=0x1c (modern Combination Output Interface, 80-911-0119-00)
+//          -- 16 outputs (4 high-current DC1..DC4 + 12 dimmable
+//          DC5..DC16). This is what the plugin's "coi" schema
+//          option targets, since users typically want max channels.
+const contact6Spec = {
+  configName: 'Contact 6 Test',
+  module: { dipswitch: 0x18, name: 'Contact 6', typeCode: 0x09 },
   bankInstance: 0,
   circuits: [{ name: 'C1 Load', circuitId: 13 }]
 }
-const c6Gen = generateZcf(c6Spec, template)
-const c6Parsed = parseZcfFull(c6Gen)
-if (c6Parsed.body.modules.records[0].moduleSpecificValue !== 0x09) {
-  throw new Error(`m1 typeCode override failed: got 0x${c6Parsed.body.modules.records[0].moduleSpecificValue.toString(16)}, want 0x09`)
+const contact6Gen = generateZcf(contact6Spec, template)
+const contact6Parsed = parseZcfFull(contact6Gen)
+if (contact6Parsed.body.modules.records[0].moduleSpecificValue !== 0x09) {
+  throw new Error(`Contact 6 typeCode override failed: got 0x${contact6Parsed.body.modules.records[0].moduleSpecificValue.toString(16)}, want 0x09`)
 }
-console.log(`generator: typeCode override 0x09 (C6/COI) lands in module_specific_value: OK`)
+console.log(`generator: typeCode override 0x09 (Contact 6, 6 outputs) lands in module_specific_value: OK`)
+
+const coiSpec = {
+  configName: 'COI 16-Channel Test',
+  module: { dipswitch: 0x10, name: '16-CH COI', typeCode: 0x1c },
+  bankInstance: 1,
+  circuits: [{ name: 'High Current 1', circuitId: 13 }]
+}
+const coiGen = generateZcf(coiSpec, template)
+const coiParsed = parseZcfFull(coiGen)
+if (coiParsed.body.modules.records[0].moduleSpecificValue !== 0x1c) {
+  throw new Error(`COI typeCode override failed: got 0x${coiParsed.body.modules.records[0].moduleSpecificValue.toString(16)}, want 0x1c`)
+}
+// MODULE_TYPE_OUTPUT_COUNT[0x1c] = 16, so a 1-circuit spec should pad
+// to 16 generated circuits (1 user + 15 placeholders).
+if (coiParsed.body.circuits.records.length !== 16) {
+  throw new Error(`COI 1-circuit spec should pad to 16 circuits (modern COI has 16 outputs), got ${coiParsed.body.circuits.records.length}`)
+}
+console.log(`generator: typeCode override 0x1c (modern COI, 16 outputs) pads to 16 circuits: OK`)
 
 console.log('\nzcf-encoder test: PASS')
