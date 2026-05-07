@@ -258,6 +258,41 @@ the tool / MFD recognises is the next thing to validate. Plan: open
 a generated file in the CZone Configuration Tool and report what it
 says. If the tool accepts it, the MFD upload path is the next test.
 
+#### Verifying the download locally
+
+Quickest check — fetch the file and inspect it with the bundled
+heuristic parser (the same scanner the runtime uses on inbound
+PGN 130816):
+
+```bash
+curl -O "http://localhost:3000/plugins/signalk-n2k-switching-emulator/zcf?bank=0"
+node -e "
+  const { parseZcf } = require('signalk-n2k-switching-emulator/dist/zcfParser.js');
+  const buf = require('fs').readFileSync('signalk-bank-0.zcf');
+  const s = parseZcf(buf);
+  console.log('circuits:', s.circuits.length, 'first:', s.firstCircuitId, 'contiguous:', s.contiguous);
+  for (const c of s.circuits) console.log(' ', c.circuitId, c.name);
+"
+```
+
+The expected output: one circuit per configured switch, `firstId`
+matches your `czoneFirstCircuitId`, contiguous ids.
+
+End-to-end against a fresh signalk-server in a sandbox:
+
+```bash
+cd /path/to/czone-spec/stubplotter
+eval "$(./setup.sh)"
+make smoke      # installs SK + plugin, drives the rig + downloads & parses the .zcf
+./teardown.sh
+```
+
+`make smoke` already covers all the on-bus PGN-level rules (CZone
+MFG=295 gate, heartbeat regularity, switch-command round-trip, the
+side-bar PGNs, the PGN 130816 push). With the new endpoint check it
+now also asserts the synthesized `.zcf` parses cleanly and contains
+the bank's switches at the expected ids.
+
 ### Pushing a `.zcf` from the plugin (experimental)
 
 When the plugin is enabled with `czoneZcfPushEnabled: true`, it
