@@ -693,6 +693,53 @@ export interface ZcfGenSpec {
   }>
 }
 
+// Trailing-section index of the labelled_entities section (tag 0x05) per
+// czone-spec/tools/zcf_sections.py LABELLED_ENTITIES_TRAILING_INDEX.
+const LABELLED_ENTITIES_TRAILING_INDEX = 21
+const LABELLED_ENTITIES_SECTION_TAG = 0x05
+
+/**
+ * Rewrite the first record of the labelled_entities section so that:
+ *   - byte 0 (type) matches the user's dipswitch (the CZone Configuration
+ *     Tool's Circuit Controls binds against this; mismatch = "Unknown
+ *     Switch" in the UI)
+ *   - the name becomes the supplied moduleName
+ * field_a/b/c are preserved from the template. The section's outer
+ * record_count and section_payload_size are recomputed.
+ */
+function rewriteLabelledEntities (
+  trailing: TrailingSection[],
+  dipswitch: number,
+  moduleName: string
+): void {
+  if (trailing.length <= LABELLED_ENTITIES_TRAILING_INDEX) return
+  const ts = trailing[LABELLED_ENTITIES_TRAILING_INDEX]
+  if (ts.sectionTag !== LABELLED_ENTITIES_SECTION_TAG) return
+  if (ts.recordCount < 1 || ts.payload.length < 5) return
+  // Read the template's first record header (5 bytes: type, a, b, c, name_len).
+  const fieldA = ts.payload[1]
+  const fieldB = ts.payload[2]
+  const fieldC = ts.payload[3]
+  const oldNameLen = ts.payload[4]
+  // Preserve any subsequent records verbatim (we only mutate record 0).
+  const tail = ts.payload.slice(5 + oldNameLen)
+  const nameBytes = Buffer.from(moduleName, 'utf8')
+  if (nameBytes.length > 255) {
+    throw new Error('module name too long for labelled_entities (>255 bytes)')
+  }
+  const newRecord = Buffer.concat([
+    Buffer.from([dipswitch & 0xff, fieldA, fieldB, fieldC, nameBytes.length]),
+    nameBytes
+  ])
+  const newPayload = Buffer.concat([newRecord, tail])
+  trailing[LABELLED_ENTITIES_TRAILING_INDEX] = {
+    sectionPayloadSize: 3 + newPayload.length,
+    recordCount: ts.recordCount,
+    sectionTag: ts.sectionTag,
+    payload: newPayload
+  }
+}
+
 /**
  * Generate a .zcf from a small user-supplied spec, starting from a
  * known-good template (typically templates/template.zcf). The template's
@@ -799,6 +846,20 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
     circuitId: c.circuitId >>> 0,
     name: c.name
   }))
+
+  // Rewrite the labelled_entities record (trailing[21], tag 0x05) so its
+  // first byte (`type`) matches the user's dipswitch. Without this the
+  // CZone Configuration Tool's Circuit Controls panel binds against the
+  // template's dipswitch (0x01 in Test.zcf) instead of ours and shows
+  // "Unknown Switch" / "On/Off" with no name. Format per
+  // czone-spec/spec/zcf-trailing-labelled-entities.md:
+  //   byte 0:  type    (= module dipswitch in observed files)
+  //   byte 1:  field_a
+  //   byte 2:  field_b
+  //   byte 3:  field_c
+  //   byte 4:  name_length
+  //   bytes 5..: name (UTF-8)
+  rewriteLabelledEntities(parsed.body.trailingSections, spec.module.dipswitch & 0xff, spec.module.name)
 
   return encodeZcf(parsed)
 }
