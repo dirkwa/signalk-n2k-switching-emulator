@@ -17,7 +17,8 @@ import {
   encodeZcf,
   generateZcf,
   crc8,
-  crc32Lo20
+  crc32Lo20,
+  SUB_CATEGORY_BIT
 } from '../dist/zcfEncoder.js'
 import { parseZcf as heuristicParseZcf } from '../dist/zcfParser.js'
 
@@ -187,5 +188,43 @@ for (const c of bigSpec.circuits) {
   }
 }
 console.log(`generator: 8-circuit spec generated ${bigGen.length} bytes, both parsers see all 8 spec circuits`)
+
+// Sub-category: a per-circuit subCategory value lands in the
+// circuits-section flags_b verbatim. Verify each spec circuit's
+// flags_b matches the supplied subCategory.
+const catSpec = {
+  configName: 'Cat Test',
+  module: { dipswitch: 0x18, name: 'Cat Module' },
+  circuits: [
+    { name: 'Anchor Light', circuitId: 13, subCategory: SUB_CATEGORY_BIT.NAVIGATION },
+    { name: 'Cabin Lights', circuitId: 14, subCategory: SUB_CATEGORY_BIT.LIGHTING },
+    { name: 'Bilge Pump',   circuitId: 15, subCategory: SUB_CATEGORY_BIT.PUMPS },
+    { name: 'Fridge',       circuitId: 16, subCategory: SUB_CATEGORY_BIT.REFRIGERATION },
+    { name: 'VHF',          circuitId: 17, subCategory: SUB_CATEGORY_BIT.COMMUNICATIONS },
+    { name: 'LPG',          circuitId: 18, subCategory: SUB_CATEGORY_BIT.HOUSE_HABITAT },
+    // No subCategory -> template's flags_b is preserved
+    { name: 'Other',        circuitId: 19 }
+  ]
+}
+const catGen = generateZcf(catSpec, template)
+const catParsed = parseZcfFull(catGen)
+const expectedFlagsB = [
+  SUB_CATEGORY_BIT.NAVIGATION,
+  SUB_CATEGORY_BIT.LIGHTING,
+  SUB_CATEGORY_BIT.PUMPS,
+  SUB_CATEGORY_BIT.REFRIGERATION,
+  SUB_CATEGORY_BIT.COMMUNICATIONS,
+  SUB_CATEGORY_BIT.HOUSE_HABITAT,
+  null  // template's flags_b -- Test.zcf is 0x0002 for first circuit
+]
+for (let i = 0; i < catSpec.circuits.length; i++) {
+  const got = catParsed.body.circuits.records[i].flagsB
+  const want = expectedFlagsB[i]
+  if (want === null) continue  // template-preserved; don't pin a value
+  if (got !== want) {
+    throw new Error(`circuit ${i} (${catSpec.circuits[i].name}) flags_b = 0x${got.toString(16)}, want 0x${want.toString(16)}`)
+  }
+}
+console.log(`generator: per-circuit subCategory threaded into flags_b correctly: OK`)
 
 console.log('\nzcf-encoder test: PASS')

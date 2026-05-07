@@ -57,7 +57,24 @@ import {
 } from './czone'
 import { ZcfReassembler } from './zcfReassembler'
 import { parseZcf } from './zcfParser'
-import { generateZcf, ZcfGenSpec } from './zcfEncoder'
+import { generateZcf, ZcfGenSpec, SUB_CATEGORY_BIT } from './zcfEncoder'
+
+/**
+ * Map a UI-friendly sub-category name (or "none") to the bitmap value
+ * the .zcf circuits-section flags_b expects. Only sub-categories
+ * verified against real .zcf samples are exposed; the Configuration
+ * Tool's dialog has 25 total but we don't have ground truth for all
+ * bit assignments yet (see czone-spec/spec/zcf-section-circuits.md).
+ */
+const SUB_CATEGORY_NAME_TO_BIT: { [key: string]: number } = {
+  none: 0,
+  'house-habitat': SUB_CATEGORY_BIT.HOUSE_HABITAT,
+  navigation: SUB_CATEGORY_BIT.NAVIGATION,
+  communications: SUB_CATEGORY_BIT.COMMUNICATIONS,
+  lighting: SUB_CATEGORY_BIT.LIGHTING,
+  pumps: SUB_CATEGORY_BIT.PUMPS,
+  refrigeration: SUB_CATEGORY_BIT.REFRIGERATION
+}
 
 const CZONE_HEARTBEAT_MS = 2000
 // Re-broadcast PGN 65290 every 10 s so a plotter that joins the bus after
@@ -601,6 +618,25 @@ export default function (app: any) {
                   description:
                     'Top-level config label written into the .zcf when generating one for download. Defaults to "SignalK Switching <instance>" if empty.',
                   default: ''
+                },
+                czoneSubCategories: {
+                  type: 'array',
+                  title: 'CZone sub-categories per switch (optional)',
+                  description:
+                    'One sub-category per switch (in the same order as the switches array) shown by the CZone Configuration Tool in its Circuit Menu Sub-Categories grid. Leave a slot at "none" to keep the circuit uncategorised.',
+                  items: {
+                    type: 'string',
+                    enum: [
+                      'none',
+                      'house-habitat',
+                      'navigation',
+                      'communications',
+                      'lighting',
+                      'pumps',
+                      'refrigeration'
+                    ],
+                    default: 'none'
+                  }
                 }
               }
             }
@@ -937,13 +973,19 @@ export default function (app: any) {
     const firstCircuitId = bankFirstCircuitId(bank)
     const dipswitch = bank.czoneEnabled ? bankDipswitch(bank) : 0x18
     const moduleName = bank.czoneModuleName || `SignalK Bank ${bank.instance}`
+    const subCats = (bank.czoneSubCategories as string[]) ?? []
     const spec: ZcfGenSpec = {
       configName: bank.czoneConfigName || `SignalK Switching ${bank.instance}`,
       module: { dipswitch, name: moduleName },
-      circuits: switches.map((sw, i) => ({
-        name: switchLabel(sw),
-        circuitId: firstCircuitId + i
-      }))
+      circuits: switches.map((sw, i) => {
+        const subKey = subCats[i] ?? 'none'
+        const subCategory = SUB_CATEGORY_NAME_TO_BIT[subKey] ?? 0
+        return {
+          name: switchLabel(sw),
+          circuitId: firstCircuitId + i,
+          subCategory
+        }
+      })
     }
     return generateZcf(spec, template)
   }

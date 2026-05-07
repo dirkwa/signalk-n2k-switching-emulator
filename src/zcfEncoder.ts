@@ -690,7 +690,39 @@ export interface ZcfGenSpec {
   circuits: Array<{
     name: string
     circuitId: number                   // user-set id (matches plugin's czoneFirstCircuitId+offset)
+    /**
+     * Sub-category bitmap encoded into the circuits-section record's
+     * `flags_b` field (uint16 LE). Each bit drives one of the
+     * Configuration Tool's "Circuit Menu Sub-Categories" checkboxes
+     * (per czone-spec/spec/zcf-section-circuits.md). Use the
+     * SUB_CATEGORY_BIT enum below to construct values.
+     * If omitted, the template's `flags_b` is preserved.
+     */
+    subCategory?: number
   }>
+}
+
+/**
+ * Sub-category bit positions for `ZcfGenSpec.circuits[].subCategory`.
+ * Verified bit assignments come from cross-referencing real .zcf
+ * files (Compass Rose 11.03.26.zcf, config-6.zcf) against the
+ * Configuration Tool's Circuit Configuration dialog. Only bits we
+ * observed in samples are exposed here -- adding more requires
+ * either fresh samples or referring to the tool's own mapping.
+ */
+export const SUB_CATEGORY_BIT = {
+  /** House/Habitat -- Hot Water Cylinder, LPG/Stove, Toilet */
+  HOUSE_HABITAT: 0x0001,
+  /** Navigation -- Autopilot, Anchor Light, Nav Lights, Stern Light */
+  NAVIGATION: 0x0004,
+  /** Communications -- VHF */
+  COMMUNICATIONS: 0x0020,
+  /** Lighting -- Cabin Lights, Galley Lights */
+  LIGHTING: 0x0400,
+  /** Pumps -- Bilge pumps, Saltwater Pump, Fresh Water Pump, Live Bait Tank Pump */
+  PUMPS: 0x1000,
+  /** Refrigeration -- Fridge, Freezer, Temp Control */
+  REFRIGERATION: 0x8000
 }
 
 // Trailing-section index of the labelled_entities section (tag 0x05) per
@@ -819,7 +851,11 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   parsed.body.circuits.records = spec.circuits.map((c, i) => ({
     circuitIndex: indexBase + i,
     flagsA: circuitProto.flagsA,
-    flagsB: circuitProto.flagsB,
+    // Sub-Category bitmap: when the spec carries a per-circuit
+    // subCategory, that overrides the template's flags_b. The Configuration
+    // Tool reads this to drive its "Circuit Menu Sub-Categories"
+    // checkboxes.
+    flagsB: typeof c.subCategory === 'number' ? (c.subCategory & 0xffff) : circuitProto.flagsB,
     field2a: circuitProto.field2a,
     name: c.name,
     outputs: [

@@ -2,34 +2,33 @@
 // zcf-info.mjs — extract circuit info from a CZone .zcf file.
 //
 // Usage:
-//   node tools/zcf-info.mjs path/to/your.zcf [--strings]
+//   node tools/zcf-info.mjs path/to/your.zcf [--strings] [--dipswitch=N]
 //
-// Prints each circuit's name and circuit id, then suggests a
-// `czoneFirstCircuitId` value to put in the plugin config.
+// By default uses the full structural parser to print the modules, the
+// circuits sliced by dipswitch, the circuit_ids table, and the labelled
+// entities. Falls back to the heuristic scanner if the structural
+// parser fails (e.g. on a .zcf format version we haven't seen).
 //
-// Pass `--strings` to also dump every length-prefixed string the scanner
-// found in the file (handy for verifying which `.zcf` you're looking at).
-//
-// This is a best-effort *heuristic* parser. The .zcf format is proprietary
-// and the parser locates circuit records by scanning for length-prefixed
-// names rather than implementing the full record schema. It works on
-// .zcf files produced by the CZone Configuration Tool for typical small
-// switching configurations.
-//
-// If the output looks wrong: open the .zcf in the CZone Configuration
-// Tool, read the dipswitch off the Modules tab and the circuit IDs off the
-// Circuits tab, and configure the plugin manually.
+// --strings        also dumps every length-prefixed string in the file
+// --dipswitch=N    only print the slice owned by module dipswitch N
+//                  (decimal or 0x.. hex). Useful when more than one
+//                  module is present.
 
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { parseZcfFull } from '../dist/zcfEncoder.js'
 import { parseZcf } from '../dist/zcfParser.js'
 
 const args = process.argv.slice(2)
 const showStrings = args.includes('--strings')
+const dipswitchArg = args.find((a) => a.startsWith('--dipswitch='))
+const filterDipswitch = dipswitchArg
+  ? Number(dipswitchArg.split('=')[1])
+  : undefined
 const file = args.find((a) => !a.startsWith('--'))
 if (!file) {
-  console.error('Usage: node tools/zcf-info.mjs path/to/your.zcf [--strings]')
+  console.error('Usage: node tools/zcf-info.mjs path/to/your.zcf [--strings] [--dipswitch=N]')
   process.exit(1)
 }
 if (!fs.existsSync(file)) {
@@ -43,21 +42,126 @@ console.log(`zcf:    ${path.resolve(file)}`)
 console.log(`size:   ${data.length} bytes`)
 console.log()
 
-const summary = parseZcf(data)
+// flags_b -> sub-category name. Verified bits only; everything else is
+// reported as "0xNNNN (unknown)" so the user can see the raw value
+// rather than a misleading default.
+const SUB_CATS = [
+  [0x0001, 'House/Habitat'],
+  [0x0004, 'Navigation'],
+  [0x0020, 'Communications'],
+  [0x0400, 'Lighting'],
+  [0x1000, 'Pumps'],
+  [0x8000, 'Refrigeration']
+]
+function describeSubCategories (flagsB) {
+  if (!flagsB) return '(none)'
+  const matched = SUB_CATS.filter(([bit]) => (flagsB & bit) !== 0).map(([, n]) => n)
+  const knownMask = SUB_CATS.reduce((m, [b]) => m | b, 0)
+  const unknown = flagsB & ~knownMask
+  if (unknown) matched.push(`0x${unknown.toString(16).padStart(4, '0')} (unknown bits)`)
+  return matched.join(', ') || '(none)'
+}
 
-console.log(
-  `format version byte: 0x${summary.versionByte.toString(16).padStart(2, '0')}`
-)
-if (summary.versionByte !== 6) {
+let parsed
+try {
+  parsed = parseZcfFull(data)
+} catch (e) {
+  console.log(`structural parser failed: ${e.message}`)
+  console.log('falling back to heuristic scanner ...')
+  console.log()
+  printHeuristic()
+  process.exit(0)
+}
+
+console.log(`format version byte: 0x${parsed.header.version.toString(16).padStart(2, '0')}`)
+console.log(`config name:         ${JSON.stringify(parsed.body.configName.name)}`)
+console.log()
+
+console.log(`modules (${parsed.body.modules.records.length}):`)
+for (const m of parsed.body.modules.records) {
   console.log(
-    `  WARNING: this scanner has only been tested against version 6 files.`
+    `  dipswitch=0x${m.dipswitch.toString(16).padStart(2, '0')}  ${JSON.stringify(m.name)}`
   )
 }
 console.log()
 
+// Group circuits by the dipswitch their first output addresses.
+const circuitsByDip = new Map()
+for (const c of parsed.body.circuits.records) {
+  const dip = c.outputs[0]?.channelAddress != null
+    ? (c.outputs[0].channelAddress >> 8) & 0xff
+    : -1
+  if (!circuitsByDip.has(dip)) circuitsByDip.set(dip, [])
+  circuitsByDip.get(dip).push(c)
+}
+
+const cidByChan = new Map()
+for (const r of parsed.body.circuitIds.records) {
+  cidByChan.set(r.channelAddress, r)
+}
+
+console.log(`circuits sliced by dipswitch:`)
+for (const dip of [...circuitsByDip.keys()].sort((a, b) => a - b)) {
+  if (filterDipswitch !== undefined && dip !== filterDipswitch) continue
+  const list = circuitsByDip.get(dip)
+  const moduleName = parsed.body.modules.records.find(m => m.dipswitch === dip)?.name ?? '(no module)'
+  const dipStr = dip < 0 ? '(invalid)' : `0x${dip.toString(16).padStart(2, '0')}`
+  console.log(`  dipswitch=${dipStr}  module=${JSON.stringify(moduleName)}  circuits=${list.length}`)
+  for (const c of list) {
+    const drefAddr = c.displayRefs[0]?.displayAddress
+    const cid = drefAddr != null ? cidByChan.get(drefAddr) : undefined
+    const cidStr = cid ? `cid=${cid.circuitId}` : 'cid=(no matching circuit_id)'
+    console.log(
+      `    [idx=${c.circuitIndex}] ${cidStr}  flags_a=0x${c.flagsA.toString(16).padStart(2, '0')}  flags_b=0x${c.flagsB.toString(16).padStart(4, '0')} (${describeSubCategories(c.flagsB)})  ${JSON.stringify(c.name)}`
+    )
+  }
+}
+console.log()
+
+if (filterDipswitch === undefined) {
+  console.log(`circuit_ids table (${parsed.body.circuitIds.records.length}):`)
+  for (const r of parsed.body.circuitIds.records) {
+    const dip = (r.channelAddress >> 8) & 0xff
+    const cidStr = r.circuitId === 0 ? '(unset)' : `0x${r.circuitId.toString(16).padStart(8, '0')}`
+    console.log(
+      `  cid=${cidStr.padStart(10)}  chan=0x${r.channelAddress.toString(16).padStart(4, '0')} (dip=0x${dip.toString(16).padStart(2, '0')})  ${JSON.stringify(r.name)}`
+    )
+  }
+  console.log()
+
+  // Configuration suggestions: if every dipswitch has a contiguous
+  // circuit_id run, suggest the plugin's czoneFirstCircuitId per dipswitch.
+  console.log('plugin config suggestions per dipswitch:')
+  for (const dip of [...circuitsByDip.keys()].sort((a, b) => a - b)) {
+    if (dip < 0) continue
+    const list = circuitsByDip.get(dip)
+    const cids = []
+    for (const c of list) {
+      const drefAddr = c.displayRefs[0]?.displayAddress
+      const cid = drefAddr != null ? cidByChan.get(drefAddr)?.circuitId : undefined
+      if (cid !== undefined && cid !== 0) cids.push(cid & 0xffff)
+    }
+    cids.sort((a, b) => a - b)
+    if (cids.length === 0) {
+      console.log(`  dip=0x${dip.toString(16).padStart(2, '0')}: no controllable circuits`)
+      continue
+    }
+    const contiguous = cids[cids.length - 1] - cids[0] === cids.length - 1
+    const dipBin = dip.toString(2).padStart(8, '0').split('').reverse().join('')
+    if (contiguous) {
+      console.log(`  dip=0x${dip.toString(16).padStart(2, '0')} (czoneDipswitch="${dipBin}") czoneFirstCircuitId=${cids[0]} (${cids.length} circuits, contiguous)`)
+    } else {
+      console.log(`  dip=0x${dip.toString(16).padStart(2, '0')} (czoneDipswitch="${dipBin}") circuits ${cids.join(',')} (NON-contiguous)`)
+    }
+  }
+  console.log()
+}
+
 if (showStrings) {
+  // Use the heuristic scanner for string dump only.
+  const heur = parseZcf(data)
   console.log('strings found in file (offset, length, text):')
-  for (const s of summary.strings) {
+  for (const s of heur.strings) {
     console.log(
       `  0x${s.offset.toString(16).padStart(4, '0')}  len=${String(s.length).padStart(2)}  ${s.text}`
     )
@@ -65,45 +169,23 @@ if (showStrings) {
   console.log()
 }
 
-if (summary.circuits.length === 0) {
-  console.log(
-    'No circuits found. This .zcf may not contain switchable circuits ' +
-      'or its layout is one this scanner does not yet handle.'
-  )
-  process.exit(0)
+function printHeuristic () {
+  const summary = parseZcf(data)
+  console.log(`format version byte: 0x${summary.versionByte.toString(16).padStart(2, '0')}`)
+  console.log()
+  if (summary.circuits.length === 0) {
+    console.log('No circuits found by the heuristic scanner.')
+    return
+  }
+  console.log('circuit_id  name')
+  for (const c of summary.circuits) {
+    console.log(`  ${String(c.circuitId).padStart(8)}  ${c.name}`)
+  }
+  console.log()
+  console.log(`first circuit id: ${summary.firstCircuitId}`)
+  if (summary.contiguous) {
+    console.log(`circuit ids contiguous — czoneFirstCircuitId: ${summary.firstCircuitId}`)
+  } else {
+    console.log('circuit ids are NOT contiguous; configure the plugin manually.')
+  }
 }
-
-console.log('circuit_id  name')
-for (const c of summary.circuits) {
-  console.log(`  ${String(c.circuitId).padStart(8)}  ${c.name}`)
-}
-console.log()
-
-const firstId = summary.firstCircuitId
-const lastId = summary.circuits[summary.circuits.length - 1].circuitId
-
-console.log(`first circuit id: ${firstId}`)
-if (summary.contiguous) {
-  console.log(
-    `circuit ids ${firstId}..${lastId} are contiguous — czoneFirstCircuitId: ${firstId}`
-  )
-} else {
-  console.log(
-    `circuit ids are NOT contiguous (range ${firstId}..${lastId}, ${summary.circuits.length} circuits). ` +
-      `The plugin's czoneFirstCircuitId expects a contiguous run; either reconfigure your ` +
-      `.zcf so the circuits used by this module have sequential ids, or pick a starting id ` +
-      `and accept that gaps map to "no switch".`
-  )
-}
-console.log()
-
-// Dipswitch is somewhere in the module section near the start of the file,
-// but its exact offset varies by file version and which optional fields
-// are present. We don't try to extract it automatically. Tell the user
-// where to look.
-console.log(
-  'dipswitch: open the .zcf in the CZone Configuration Tool, click the ' +
-    "Modules tab, and read the dipswitch from there. Convert it to the plugin's " +
-    "binary-string form by writing positions 1..8 as '1' (on) or '0' (off), " +
-    'leftmost = position 1.'
-)
