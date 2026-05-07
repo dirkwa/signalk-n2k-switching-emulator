@@ -85,8 +85,12 @@ const reparsed = parseZcfFull(generated)
 if (reparsed.body.configName.name !== spec.configName) {
   throw new Error(`generated config_name = ${reparsed.body.configName.name}, want ${spec.configName}`)
 }
-if (reparsed.body.modules.records.length !== 1) {
-  throw new Error(`generated has ${reparsed.body.modules.records.length} modules, want 1`)
+// 2 modules expected: our emulated Output Interface + the template's
+// Display Interface (m1=0x10) which we now preserve so the
+// Configuration Tool's "Display Interface" tree node is populated and
+// the per-circuit "All Display Interfaces" Circuit Control binds.
+if (reparsed.body.modules.records.length !== 2) {
+  throw new Error(`generated has ${reparsed.body.modules.records.length} modules, want 2`)
 }
 const m = reparsed.body.modules.records[0]
 if (m.dipswitch !== spec.module.dipswitch) throw new Error(`module dipswitch = 0x${m.dipswitch.toString(16)}, want 0x${spec.module.dipswitch.toString(16)}`)
@@ -118,6 +122,10 @@ console.log(`generator: produced ${generated.length}-byte .zcf with ${spec.circu
 const dip = spec.module.dipswitch & 0xff
 for (const ckt of reparsed.body.circuits.records) {
   for (const o of ckt.outputs) {
+    // channel_address == 0x0000 is the "All Display Interfaces" wildcard
+    // Circuit Control entry; it is not dipswitch-namespaced (its dip
+    // byte is intentionally 0).
+    if (o.channelAddress === 0) continue
     if (((o.channelAddress >> 8) & 0xff) !== dip) {
       throw new Error(`output.channelAddress 0x${o.channelAddress.toString(16)} not under dipswitch 0x${dip.toString(16)}`)
     }
@@ -261,5 +269,33 @@ if (paddingNames[0] !== 'Spare DC2' || paddingNames[1] !== 'Spare DC3') {
   throw new Error(`unexpected padding names: ${JSON.stringify(paddingNames)}`)
 }
 console.log(`generator: padded 1 spec circuit -> 3 generated circuits to match module-type output count: OK`)
+
+// Display Interface + wildcard output: every generated circuit must
+// have a leading outputs[0] with channelAddress = 0x0000 (the "All
+// Display Interfaces" wildcard the Configuration Tool's Circuit
+// Control surface keys off), AND the modules list must include both
+// our Output Interface (m1=0x0f) and the template's Display Interface
+// (m1=0x10) -- otherwise mister nui's side-bar binding doesn't work.
+const sidebarSpec = {
+  configName: 'Sidebar Test',
+  module: { dipswitch: 0x18, name: 'Sidebar Module' },
+  bankInstance: 0,
+  circuits: [{ name: 'Lights', circuitId: 13 }]
+}
+const sidebarGen = generateZcf(sidebarSpec, template)
+const sidebarParsed = parseZcfFull(sidebarGen)
+if (sidebarParsed.body.modules.records.length < 2) {
+  throw new Error(`sidebar config: expected >=2 modules (Output + Display Interface), got ${sidebarParsed.body.modules.records.length}`)
+}
+const hasDisplayInterface = sidebarParsed.body.modules.records.some(m => m.moduleSpecificValue === 0x10)
+if (!hasDisplayInterface) {
+  throw new Error(`sidebar config: no Display Interface module (m1=0x10) in generated file -- "All Display Interfaces" Circuit Control will be missing`)
+}
+for (const ckt of sidebarParsed.body.circuits.records) {
+  if (ckt.outputs.length < 2 || ckt.outputs[0].channelAddress !== 0) {
+    throw new Error(`circuit ${ckt.name} missing leading outputs[0] chan=0x0000 wildcard (got outputs=${ckt.outputs.map(o => '0x' + o.channelAddress.toString(16)).join(',')})`)
+  }
+}
+console.log(`generator: every circuit has leading wildcard output + Display Interface module preserved: OK`)
 
 console.log('\nzcf-encoder test: PASS')

@@ -234,15 +234,25 @@ What gets put in the file:
 
 - **config name** = `czoneConfigName` (defaults to
   `SignalK Switching <instance>`)
-- **one module record** = `(czoneDipswitch, czoneModuleName)`. The
-  module is given the type code `m1=0x0f` (a 3-output module type
-  per `czone-spec/spec/zcf-section-modules.md`).
+- **two module records**:
+  1. an **Output Interface** = `(czoneDipswitch, czoneModuleName)`,
+     given the type code `m1=0x0f` (a 3-output module type per
+     `czone-spec/spec/zcf-section-modules.md`).
+  2. a **Display Interface** record (`m1=0x10`) carried over from
+     the bundled template. The Configuration Tool's "Module
+     Configuration" tree shows both, and the per-circuit
+     "All Display Interfaces" Circuit Control wildcard binds
+     against the Display Interface's presence (without it the
+     side-bar control on Navico displays doesn't bind).
 - **at least 3 circuits** — one per configured switch path, named
   via the path's SignalK `meta.displayName` (or the path's last
   segment, prettified). When fewer than 3 switches are configured
   the generator pads with placeholder circuits ("Spare DC2",
   "Spare DC3") so the Configuration Tool doesn't synthesise
-  "DC{n} - Paralleled with DC1" rows.
+  "DC{n} - Paralleled with DC1" rows. Each circuit gets a
+  leading wildcard output (`channel_address = 0x0000`) for
+  "All Display Interfaces" plus a real physical-output entry at
+  `(dipswitch << 8) | (0x1e + offset)`.
 - **per-circuit Sub-Category** comes from the optional
   `czoneSubCategories` field — one of `none`, `house-habitat`,
   `navigation`, `communications`, `lighting`, `pumps`,

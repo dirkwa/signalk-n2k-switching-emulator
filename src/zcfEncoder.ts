@@ -842,16 +842,42 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   const cnBytes = Buffer.from(spec.configName, 'ascii')
   parsed.body.configName = { length: cnBytes.length, name: spec.configName }
 
-  // Mutate the first module record to be the emulated module. Drop any
-  // additional modules (the template's "MFD" placeholder, etc.) so the
-  // CZone tool sees a single module owned by the user's plugin.
+  // Mutate the first module record to be the emulated module. KEEP any
+  // additional modules from the template -- in particular the
+  // "Display Interface" record (`module_specific_value` byte = 0x10),
+  // which is what the Configuration Tool uses to populate the
+  // "Display Interface" dropdown in Switch Bank PGN config and to
+  // bind the per-circuit wildcard control "All Display Interfaces"
+  // (verified against config-6.zcf, which has both a Signal-K-named
+  // Output Interface module at m1=0x0f AND a Zeus-named Display
+  // Interface module at m1=0x10; without the second module the
+  // Configuration Tool's Module Configuration tree shows only
+  // "Output Interface" and the "All Display Interfaces" Circuit
+  // Control row is missing).
   const moduleProto = parsed.body.modules.records[0]
+  const userDipswitch = spec.module.dipswitch & 0xff
+  // If a remaining module shares the user's dipswitch, move it to an
+  // unused dipswitch (the MFD/Display Interface is what we typically
+  // hit here; collisions otherwise produce two modules at the same
+  // dipswitch which the tool refuses to render correctly).
+  const usedDipswitches = new Set<number>([userDipswitch])
+  const remainingModules = parsed.body.modules.records.slice(1).map(m => {
+    if (m.dipswitch === userDipswitch) {
+      let alt = 1
+      while (usedDipswitches.has(alt) && alt < 0xff) alt++
+      usedDipswitches.add(alt)
+      return { ...m, dipswitch: alt }
+    }
+    usedDipswitches.add(m.dipswitch)
+    return m
+  })
   parsed.body.modules.records = [
     {
       ...moduleProto,
-      dipswitch: spec.module.dipswitch & 0xff,
+      dipswitch: userDipswitch,
       name: spec.module.name
-    }
+    },
+    ...remainingModules
   ]
 
   // Pad the spec circuits up to the module type's output count so the
@@ -913,6 +939,18 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   const drefBaseAddr = (dipHi | (protoDrefAddr & 0xff)) & 0xffff
   const indexBase = circuitProto.circuitIndex
 
+  // Leading wildcard output (`channel_address = 0x0000`) — the Configuration
+  // Tool renders this as the "All Display Interfaces" Circuit Control,
+  // which is what makes a circuit visible on every Display Interface
+  // module on the bus rather than just the one it's wired to. Verified
+  // against config-6.zcf: every circuit there carries a `chan=0x0000`
+  // entry first, then the real physical-output `chan=(dipswitch<<8)|N`.
+  // Compass Rose's Autopilot etc. likewise carries `chan=0x0000`.
+  // Without this leading entry the side-bar control on Navico displays
+  // doesn't bind (mister nui's note via Scott).
+  const wildcardFlagsBytes = circuitProto.outputs.find(o => o.channelAddress === 0)?.flagsBytes
+    ?? Buffer.from('0101010000', 'hex')
+
   parsed.body.circuits.records = circuitsForGen.map((c, i) => ({
     circuitIndex: indexBase + i,
     flagsA: circuitProto.flagsA,
@@ -925,8 +963,14 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
     name: c.name,
     outputs: [
       {
+        // Wildcard "All Display Interfaces" entry.
+        channelAddress: 0x0000,
+        flagsBytes: Buffer.from(wildcardFlagsBytes),
+        name: ''
+      },
+      {
         channelAddress: (outBaseChan + i) & 0xffff,
-        flagsBytes: Buffer.from(circuitProto.outputs[0].flagsBytes),
+        flagsBytes: Buffer.from(circuitProto.outputs[circuitProto.outputs.length - 1].flagsBytes),
         name: ''  // outputs in the template are unnamed; circuit name is the user-visible one
       }
     ],
