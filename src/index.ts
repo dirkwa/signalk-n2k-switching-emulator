@@ -318,7 +318,7 @@ export default function (app: any) {
       const n2kCallback = (msg: any) => {
         try {
           if (msg.pgn == CZONE_PGN_ZCF_TRANSFER) {
-            const payload = extractRawPayload(msg)
+            const payload = extractZcfPayload(msg) ?? extractRawPayload(msg)
             if (payload && msg.src !== undefined) {
               zcfReassembler.ingest(msg.src, payload)
             }
@@ -544,6 +544,47 @@ export default function (app: any) {
         }
       }
     }
+  }
+
+  // PGN 130816 dedicated extractor. canboatjs may deliver this PGN in
+  // either of two shapes:
+  //
+  //  (a) Stub: fields.Data is a hex string of EVERY byte after the
+  //      0x27 0x99 manufacturer header (chunk_idx + flag + reserved
+  //      + actual .zcf data). Older canboat releases use this.
+  //
+  //  (b) Named: fields.{chunkIndex, flag, reserved6, data} where each
+  //      field carries only its slice. The `data` field is just the
+  //      trailing .zcf payload, NOT everything-after-header. Newer
+  //      canboat releases (with the full BEP CZone .zcf Bus Distribution
+  //      definition) use this shape.
+  //
+  // The legacy extractRawPayload only handles (a) and would prepend
+  // 0x27 0x99 to the data slice in (b), producing a buffer the
+  // ZcfReassembler reads chunk_idx out of the wrong byte offsets.
+  // This helper handles (b) explicitly: rebuild the wire bytes from
+  // the named fields, in the order the ZcfReassembler expects.
+  function extractZcfPayload (msg: any): Buffer | undefined {
+    const fields = msg?.fields
+    if (!fields || typeof fields.chunkIndex !== 'number') return undefined
+    const dataHex = fields.data ?? fields.Data
+    if (typeof dataHex !== 'string') return undefined
+    const cleaned = dataHex.replace(/[^0-9a-fA-F]/g, '')
+    if (cleaned.length % 2 !== 0) return undefined
+    const dataBytes = Buffer.alloc(cleaned.length / 2)
+    for (let i = 0; i < dataBytes.length; i++) {
+      dataBytes[i] = parseInt(cleaned.substr(i * 2, 2), 16)
+    }
+    // Build the 23-byte fixed header + dataBytes:
+    //   [0x27 0x99] + chunkIndex u16 LE + flag u8 + 18 reserved bytes + data
+    const buf = Buffer.alloc(23 + dataBytes.length)
+    buf[0] = 0x27
+    buf[1] = 0x99
+    buf.writeUInt16LE(fields.chunkIndex & 0xffff, 2)
+    buf[4] = (fields.flag ?? 0) & 0xff
+    // bytes 5..22 are reserved zero (already zero from Buffer.alloc).
+    dataBytes.copy(buf, 23)
+    return buf
   }
 
   function extractRawPayload (msg: any): Buffer | undefined {
