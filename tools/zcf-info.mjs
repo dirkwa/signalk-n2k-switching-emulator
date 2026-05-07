@@ -42,15 +42,27 @@ console.log(`zcf:    ${path.resolve(file)}`)
 console.log(`size:   ${data.length} bytes`)
 console.log()
 
-// flags_b -> sub-category name. Verified bits only; everything else is
-// reported as "0xNNNN (unknown)" so the user can see the raw value
-// rather than a misleading default.
+// flags_b -> sub-category name. All 16 low-half bits documented from
+// the Configuration Tool's m_CheckBoxes array (verified against
+// real .zcf samples). The high 16 bits of the 32-bit display-categories
+// bitmap (Favourites/DC/AC/UserCategories/Entertainment/etc.) live in
+// a section we haven't decoded yet, so they don't appear in flags_b.
 const SUB_CATS = [
   [0x0001, 'House/Habitat'],
+  [0x0002, 'Vessel Critical'],
   [0x0004, 'Navigation'],
+  [0x0008, 'Electronics'],
+  [0x0010, '24-Hour'],
   [0x0020, 'Communications'],
+  [0x0040, 'Accessories'],
+  [0x0080, 'Indicators and Alarms'],
+  [0x0100, 'Engine Management'],
+  [0x0200, 'Fans/Ventilation'],
   [0x0400, 'Lighting'],
+  [0x0800, 'Vessel Management'],
   [0x1000, 'Pumps'],
+  [0x2000, 'Propulsion Management'],
+  [0x4000, 'Power'],
   [0x8000, 'Refrigeration']
 ]
 function describeSubCategories (flagsB) {
@@ -155,6 +167,21 @@ if (filterDipswitch === undefined) {
     }
   }
   console.log()
+}
+
+// Config notes (trailing[32], tag 0x02) — free-text installer/owner notes.
+// Layout: uint16 LE length-prefix followed by the UTF-8 note bytes.
+const CONFIG_NOTES_TRAILING_INDEX = 32
+const CONFIG_NOTES_SECTION_TAG = 0x02
+const cn = parsed.body.trailingSections[CONFIG_NOTES_TRAILING_INDEX]
+if (cn && cn.sectionTag === CONFIG_NOTES_SECTION_TAG && cn.payload.length >= 2) {
+  const noteLen = cn.payload.readUInt16LE(0)
+  if (noteLen > 0 && cn.payload.length >= 2 + noteLen) {
+    const note = cn.payload.slice(2, 2 + noteLen).toString('utf8')
+    console.log('config notes:')
+    console.log('  ' + note.split(/\r?\n/).join('\n  '))
+    console.log()
+  }
 }
 
 if (showStrings) {

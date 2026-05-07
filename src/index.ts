@@ -61,18 +61,27 @@ import { generateZcf, ZcfGenSpec, SUB_CATEGORY_BIT } from './zcfEncoder'
 
 /**
  * Map a UI-friendly sub-category name (or "none") to the bitmap value
- * the .zcf circuits-section flags_b expects. Only sub-categories
- * verified against real .zcf samples are exposed; the Configuration
- * Tool's dialog has 25 total but we don't have ground truth for all
- * bit assignments yet (see czone-spec/spec/zcf-section-circuits.md).
+ * the .zcf circuits-section flags_b expects. All 16 low-half bits
+ * exposed (verified via czone-spec/spec/zcf-section-circuits.md
+ * cross-referenced with real .zcf samples).
  */
 const SUB_CATEGORY_NAME_TO_BIT: { [key: string]: number } = {
   none: 0,
   'house-habitat': SUB_CATEGORY_BIT.HOUSE_HABITAT,
+  'vessel-critical': SUB_CATEGORY_BIT.VESSEL_CRITICAL,
   navigation: SUB_CATEGORY_BIT.NAVIGATION,
+  electronics: SUB_CATEGORY_BIT.ELECTRONICS,
+  '24-hour': SUB_CATEGORY_BIT.TWENTY_FOUR_HOUR,
   communications: SUB_CATEGORY_BIT.COMMUNICATIONS,
+  accessories: SUB_CATEGORY_BIT.ACCESSORIES,
+  'indicators-alarms': SUB_CATEGORY_BIT.INDICATORS_AND_ALARMS,
+  'engine-management': SUB_CATEGORY_BIT.ENGINE_MANAGEMENT,
+  'fans-ventilation': SUB_CATEGORY_BIT.FANS_VENTILATION,
   lighting: SUB_CATEGORY_BIT.LIGHTING,
+  'vessel-management': SUB_CATEGORY_BIT.VESSEL_MANAGEMENT,
   pumps: SUB_CATEGORY_BIT.PUMPS,
+  'propulsion-management': SUB_CATEGORY_BIT.PROPULSION_MANAGEMENT,
+  power: SUB_CATEGORY_BIT.POWER,
   refrigeration: SUB_CATEGORY_BIT.REFRIGERATION
 }
 
@@ -629,10 +638,20 @@ export default function (app: any) {
                     enum: [
                       'none',
                       'house-habitat',
+                      'vessel-critical',
                       'navigation',
+                      'electronics',
+                      '24-hour',
                       'communications',
+                      'accessories',
+                      'indicators-alarms',
+                      'engine-management',
+                      'fans-ventilation',
                       'lighting',
+                      'vessel-management',
                       'pumps',
+                      'propulsion-management',
+                      'power',
                       'refrigeration'
                     ],
                     default: 'none'

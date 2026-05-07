@@ -737,24 +737,28 @@ const MODULE_TYPE_OUTPUT_COUNT: { [key: number]: number } = {
 
 /**
  * Sub-category bit positions for `ZcfGenSpec.circuits[].subCategory`.
- * Verified bit assignments come from cross-referencing real .zcf
- * files (Compass Rose 11.03.26.zcf, config-6.zcf) against the
- * Configuration Tool's Circuit Configuration dialog. Only bits we
- * observed in samples are exposed here -- adding more requires
- * either fresh samples or referring to the tool's own mapping.
+ * The full 32-bit bitmap is held in tCircuitConfig in memory; only the
+ * low 16 bits are stored in the wire-format `flags_b` field (the high
+ * 16 bits, including the master Favourites/DC/AC checkboxes and the
+ * five user-definable slots, live in a section we have not yet
+ * decoded). All sixteen low-half bits are exposed here.
  */
 export const SUB_CATEGORY_BIT = {
-  /** House/Habitat -- Hot Water Cylinder, LPG/Stove, Toilet */
   HOUSE_HABITAT: 0x0001,
-  /** Navigation -- Autopilot, Anchor Light, Nav Lights, Stern Light */
+  VESSEL_CRITICAL: 0x0002,
   NAVIGATION: 0x0004,
-  /** Communications -- VHF */
+  ELECTRONICS: 0x0008,
+  TWENTY_FOUR_HOUR: 0x0010,
   COMMUNICATIONS: 0x0020,
-  /** Lighting -- Cabin Lights, Galley Lights */
+  ACCESSORIES: 0x0040,
+  INDICATORS_AND_ALARMS: 0x0080,
+  ENGINE_MANAGEMENT: 0x0100,
+  FANS_VENTILATION: 0x0200,
   LIGHTING: 0x0400,
-  /** Pumps -- Bilge pumps, Saltwater Pump, Fresh Water Pump, Live Bait Tank Pump */
+  VESSEL_MANAGEMENT: 0x0800,
   PUMPS: 0x1000,
-  /** Refrigeration -- Fridge, Freezer, Temp Control */
+  PROPULSION_MANAGEMENT: 0x2000,
+  POWER: 0x4000,
   REFRIGERATION: 0x8000
 }
 
