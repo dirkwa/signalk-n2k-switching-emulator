@@ -234,12 +234,25 @@ What gets put in the file:
 
 - **config name** = `czoneConfigName` (defaults to
   `SignalK Switching <instance>`)
-- **one module record** = `(czoneDipswitch, czoneModuleName)`
-- **one circuit per configured switch path**, named via the path's
-  SignalK `meta.displayName` (or the path's last segment, prettified)
+- **one module record** = `(czoneDipswitch, czoneModuleName)`. The
+  module is given the type code `m1=0x0f` (a 3-output module type
+  per `czone-spec/spec/zcf-section-modules.md`).
+- **at least 3 circuits** — one per configured switch path, named
+  via the path's SignalK `meta.displayName` (or the path's last
+  segment, prettified). When fewer than 3 switches are configured
+  the generator pads with placeholder circuits ("Spare DC2",
+  "Spare DC3") so the Configuration Tool doesn't synthesise
+  "DC{n} - Paralleled with DC1" rows.
+- **per-circuit Sub-Category** comes from the optional
+  `czoneSubCategories` field — one of `none`, `house-habitat`,
+  `navigation`, `communications`, `lighting`, `pumps`,
+  `refrigeration`. Drives the Configuration Tool's "Circuit Menu
+  Sub-Categories" checkboxes.
 - **circuit ids** start at `czoneFirstCircuitId` and run consecutively
   (so the ids the MFD sees match what the running plugin handles for
-  inbound PGN 65280 commands)
+  inbound PGN 65280 commands).
+- **Switch Bank Instance** in the Configuration Tool's Switch Bank
+  PGN config = the bank's `instance` setting.
 
 The file is a byte-identical mutation of a known-good template
 (`templates/template.zcf`, which is the bundled `Test.zcf` sample

@@ -687,6 +687,17 @@ export interface ZcfGenSpec {
     dipswitch: number                   // 0..255
     name: string                        // module label as shown in CZone tool
   }
+  /**
+   * Switch Bank Instance, encoded into labelled_entities[0].field_b.
+   * Drives the "Switch Bank PGN config -> Switch Bank Instance" value
+   * the CZone Configuration Tool displays for this module. Defaults
+   * to 0 if omitted.
+   *
+   * (Note: this is independent of the underlying canboatjs PGN 127501
+   * Indicator-Bank-Instance value, which the plugin's runtime emits
+   * separately based on the bank's `instance` setting.)
+   */
+  bankInstance?: number
   circuits: Array<{
     name: string
     circuitId: number                   // user-set id (matches plugin's czoneFirstCircuitId+offset)
@@ -700,6 +711,28 @@ export interface ZcfGenSpec {
      */
     subCategory?: number
   }>
+}
+
+/**
+ * Module-type code (the modules-section record's `module_specific_value`
+ * byte, called `m1` in the spec) -> number of physical outputs the
+ * Configuration Tool expects. When fewer circuits are defined than
+ * outputs declared, the tool synthesises "DC{n} - Paralleled with DC1"
+ * placeholder rows for unused outputs. To suppress those, the
+ * generator pads its circuit list up to the expected output count
+ * with non-empty placeholder circuits.
+ *
+ * Values come from cross-referencing real .zcf samples:
+ *   m1=0x0f (15) -> 3 outputs (Test.zcf "Emulated Module" had 3 circuits;
+ *                   our 1-circuit generated file shows DC1, DC3, DC4 in
+ *                   the tool, the unused two as "Paralleled")
+ *   m1=0x36 (54) -> 13 outputs (Compass Rose CXP modules had 13 circuits)
+ *   m1=0x10 (16) -> N/A (display/MFD; carries no outputs)
+ *   m1=0x1d (29) -> N/A (keypad)
+ */
+const MODULE_TYPE_OUTPUT_COUNT: { [key: number]: number } = {
+  0x0f: 3,
+  0x36: 13
 }
 
 /**
@@ -735,14 +768,19 @@ const LABELLED_ENTITIES_SECTION_TAG = 0x05
  *   - byte 0 (type) matches the user's dipswitch (the CZone Configuration
  *     Tool's Circuit Controls binds against this; mismatch = "Unknown
  *     Switch" in the UI)
+ *   - byte 2 (field_b) carries the supplied bankInstance (drives the
+ *     "Switch Bank Instance" value the tool displays in Switch Bank
+ *     PGN config; verified against config-6.zcf where this byte = 5
+ *     paired with name 'SW Bank 5')
  *   - the name becomes the supplied moduleName
- * field_a/b/c are preserved from the template. The section's outer
+ * field_a/c are preserved from the template. The section's outer
  * record_count and section_payload_size are recomputed.
  */
 function rewriteLabelledEntities (
   trailing: TrailingSection[],
   dipswitch: number,
-  moduleName: string
+  moduleName: string,
+  bankInstance: number
 ): void {
   if (trailing.length <= LABELLED_ENTITIES_TRAILING_INDEX) return
   const ts = trailing[LABELLED_ENTITIES_TRAILING_INDEX]
@@ -750,7 +788,6 @@ function rewriteLabelledEntities (
   if (ts.recordCount < 1 || ts.payload.length < 5) return
   // Read the template's first record header (5 bytes: type, a, b, c, name_len).
   const fieldA = ts.payload[1]
-  const fieldB = ts.payload[2]
   const fieldC = ts.payload[3]
   const oldNameLen = ts.payload[4]
   // Preserve any subsequent records verbatim (we only mutate record 0).
@@ -760,7 +797,7 @@ function rewriteLabelledEntities (
     throw new Error('module name too long for labelled_entities (>255 bytes)')
   }
   const newRecord = Buffer.concat([
-    Buffer.from([dipswitch & 0xff, fieldA, fieldB, fieldC, nameBytes.length]),
+    Buffer.from([dipswitch & 0xff, fieldA, bankInstance & 0xff, fieldC, nameBytes.length]),
     nameBytes
   ])
   const newPayload = Buffer.concat([newRecord, tail])
@@ -813,6 +850,30 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
     }
   ]
 
+  // Pad the spec circuits up to the module type's output count so the
+  // Configuration Tool doesn't synthesise "DC{n} - Paralleled with DC1"
+  // placeholder rows for unused outputs. The padding circuits get
+  // distinct circuit ids extending past the user's last id, names like
+  // "Spare DC2"/"Spare DC3", and no sub-category. Users who want fewer
+  // visible outputs should switch to a smaller module type, but we
+  // don't know enough types yet to expose that choice.
+  const expectedOutputs = MODULE_TYPE_OUTPUT_COUNT[moduleProto.moduleSpecificValue]
+  let circuitsForGen = spec.circuits
+  if (expectedOutputs !== undefined && spec.circuits.length < expectedOutputs) {
+    const pad: ZcfGenSpec['circuits'] = []
+    const lastId = spec.circuits[spec.circuits.length - 1].circuitId
+    for (let i = spec.circuits.length; i < expectedOutputs; i++) {
+      // The tool labels physical outputs DC1, DC2, ... DC{expectedOutputs}.
+      // Our user-defined circuits map to DC1..DC{spec.circuits.length}; the
+      // padding fills DC{spec.circuits.length + 1}..DC{expectedOutputs}.
+      pad.push({
+        name: `Spare DC${i + 1}`,
+        circuitId: lastId + 1 + (i - spec.circuits.length)
+      })
+    }
+    circuitsForGen = [...spec.circuits, ...pad]
+  }
+
   // Build the circuit list by cloning the template's first circuit
   // record per spec entry. Each clone gets:
   //   - a unique circuit_index (starting at the template's value)
@@ -848,7 +909,7 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   const drefBaseAddr = (dipHi | (protoDrefAddr & 0xff)) & 0xffff
   const indexBase = circuitProto.circuitIndex
 
-  parsed.body.circuits.records = spec.circuits.map((c, i) => ({
+  parsed.body.circuits.records = circuitsForGen.map((c, i) => ({
     circuitIndex: indexBase + i,
     flagsA: circuitProto.flagsA,
     // Sub-Category bitmap: when the spec carries a per-circuit
@@ -876,7 +937,7 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
     ]
   }))
 
-  parsed.body.circuitIds.records = spec.circuits.map((c, i) => ({
+  parsed.body.circuitIds.records = circuitsForGen.map((c, i) => ({
     channelAddress: (drefBaseAddr + i) & 0xffff,
     flags: Buffer.from(cidProto.flags),
     circuitId: c.circuitId >>> 0,
@@ -895,7 +956,12 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   //   byte 3:  field_c
   //   byte 4:  name_length
   //   bytes 5..: name (UTF-8)
-  rewriteLabelledEntities(parsed.body.trailingSections, spec.module.dipswitch & 0xff, spec.module.name)
+  rewriteLabelledEntities(
+    parsed.body.trailingSections,
+    spec.module.dipswitch & 0xff,
+    spec.module.name,
+    (spec.bankInstance ?? 0) & 0xff
+  )
 
   return encodeZcf(parsed)
 }

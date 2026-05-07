@@ -977,6 +977,7 @@ export default function (app: any) {
     const spec: ZcfGenSpec = {
       configName: bank.czoneConfigName || `SignalK Switching ${bank.instance}`,
       module: { dipswitch, name: moduleName },
+      bankInstance: bank.instance & 0xff,
       circuits: switches.map((sw, i) => {
         const subKey = subCats[i] ?? 'none'
         const subCategory = SUB_CATEGORY_NAME_TO_BIT[subKey] ?? 0

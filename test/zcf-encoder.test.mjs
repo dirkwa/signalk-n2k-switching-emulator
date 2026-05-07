@@ -227,4 +227,39 @@ for (let i = 0; i < catSpec.circuits.length; i++) {
 }
 console.log(`generator: per-circuit subCategory threaded into flags_b correctly: OK`)
 
+// Bank instance: spec.bankInstance lands in labelled_entities[0].field_b.
+// Verified against config-6.zcf (field_b=5 + name "SW Bank 5"). Without
+// this rewrite the Configuration Tool's Switch Bank PGN config row shows
+// Switch Bank Instance = 0 regardless of the user's bank.instance.
+const bankSpec = {
+  configName: 'Bank 16 Test',
+  module: { dipswitch: 0x08, name: 'Bank 16 Module' },
+  bankInstance: 16,
+  circuits: [{ name: 'Switch 1', circuitId: 13 }]
+}
+const bankGen = generateZcf(bankSpec, template)
+const bankParsed = parseZcfFull(bankGen)
+const labelEntsTrailing = bankParsed.body.trailingSections[21]
+if (!labelEntsTrailing || labelEntsTrailing.payload.length < 5) {
+  throw new Error('labelled_entities trailing section missing or too short')
+}
+const fieldB = labelEntsTrailing.payload[2]
+if (fieldB !== 16) {
+  throw new Error(`labelled_entities[0].field_b = ${fieldB}, want 16 (the bank instance)`)
+}
+console.log(`generator: bankInstance landed in labelled_entities[0].field_b: OK`)
+
+// Paralleled-output suppression: with module type m1=0x0f (3 outputs),
+// supplying 1 spec circuit pads to 3 generated circuits so the
+// Configuration Tool doesn't show "DC{n} - Paralleled with DC1" rows.
+// (Test.zcf's module is m1=0x0f, our generated test files inherit it.)
+if (bankParsed.body.circuits.records.length !== 3) {
+  throw new Error(`expected 3 circuits after padding (m1=0x0f -> 3 outputs), got ${bankParsed.body.circuits.records.length}`)
+}
+const paddingNames = bankParsed.body.circuits.records.slice(1).map(c => c.name)
+if (paddingNames[0] !== 'Spare DC2' || paddingNames[1] !== 'Spare DC3') {
+  throw new Error(`unexpected padding names: ${JSON.stringify(paddingNames)}`)
+}
+console.log(`generator: padded 1 spec circuit -> 3 generated circuits to match module-type output count: OK`)
+
 console.log('\nzcf-encoder test: PASS')
