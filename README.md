@@ -215,6 +215,49 @@ tests pass when these two PGNs appear within their windows. The rig
 ships a `make smoke` target that drives a fresh signalk-server +
 this plugin against vcan and reports pass/fail per spec rule.
 
+### Generating a `.zcf` from the plugin's switch list
+
+The plugin can synthesise a `.zcf` from its configured switches and
+hand it to you as a download. You then either open it in the
+CZone Configuration Tool to inspect / save it, or upload it to the
+MFD via the MFD's normal SD-card / USB / network upload flow.
+
+```
+http://<your-signalk-host>:3000/plugins/signalk-n2k-switching-emulator/zcf?bank=0
+```
+
+(Add `?bank=N` to pick a specific bank; defaults to bank 0.) The
+response is a binary `.zcf` named after the bank's
+`czoneModuleName` (or `signalk-bank-<instance>` if unset).
+
+What gets put in the file:
+
+- **config name** = `czoneConfigName` (defaults to
+  `SignalK Switching <instance>`)
+- **one module record** = `(czoneDipswitch, czoneModuleName)`
+- **one circuit per configured switch path**, named via the path's
+  SignalK `meta.displayName` (or the path's last segment, prettified)
+- **circuit ids** start at `czoneFirstCircuitId` and run consecutively
+  (so the ids the MFD sees match what the running plugin handles for
+  inbound PGN 65280 commands)
+
+The file is a byte-identical mutation of a known-good template
+(`templates/template.zcf`, which is the bundled `Test.zcf` sample
+from czone-spec). All structural fields the plugin doesn't
+explicitly set are preserved verbatim from the template, so the
+file passes parse-time CRC and structural checks. The plugin's
+test suite locks in byte-identity round-trip for three real `.zcf`
+samples (Test.zcf, config-6.zcf, CompassRose.zcf — 781 / 1014 /
+6384 bytes) so the encoder can't silently drift.
+
+**Caveat:** "passes parse" is not the same as "the CZone
+Configuration Tool will open this without complaint" or "the MFD
+will accept this as a config". The encoder is byte-perfect against
+real files; whether the produced *combination* of fields is one
+the tool / MFD recognises is the next thing to validate. Plan: open
+a generated file in the CZone Configuration Tool and report what it
+says. If the tool accepts it, the MFD upload path is the next test.
+
 ### Pushing a `.zcf` from the plugin (experimental)
 
 When the plugin is enabled with `czoneZcfPushEnabled: true`, it

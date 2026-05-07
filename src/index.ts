@@ -57,6 +57,7 @@ import {
 } from './czone'
 import { ZcfReassembler } from './zcfReassembler'
 import { parseZcf } from './zcfParser'
+import { generateZcf, ZcfGenSpec } from './zcfEncoder'
 
 const CZONE_HEARTBEAT_MS = 2000
 // Re-broadcast PGN 65290 every 10 s so a plotter that joins the bus after
@@ -468,6 +469,36 @@ export default function (app: any) {
     description:
       'Signal K Plugin which makes existing switches in sk available as n2k switches',
 
+    registerWithRouter: (router: any) => {
+      // GET /plugins/signalk-n2k-switching-emulator/zcf?bank=N
+      // Returns a synthesised .zcf for the requested bank as a download.
+      // Defaults to bank index 0. Useful for a user who wants to load the
+      // plugin's switch configuration into the CZone Configuration Tool
+      // or upload it to a Navico MFD via SD/USB.
+      router.get('/zcf', (req: any, res: any) => {
+        const bankIndex =
+          req.query?.bank !== undefined ? parseInt(String(req.query.bank), 10) : 0
+        if (!Number.isFinite(bankIndex) || bankIndex < 0) {
+          return res.status(400).send('bank must be a non-negative integer')
+        }
+        const bank = props?.banks?.[bankIndex]
+        if (!bank) {
+          return res.status(404).send(`no bank at index ${bankIndex}`)
+        }
+        try {
+          const zcf = generateZcfForBank(bank)
+          const filename = `${(bank.czoneModuleName || `signalk-bank-${bank.instance}`)
+            .replace(/[^a-zA-Z0-9._-]/g, '_')}.zcf`
+          res.setHeader('Content-Type', 'application/octet-stream')
+          res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+          res.send(zcf)
+        } catch (e: any) {
+          error(e)
+          res.status(500).send(`zcf generation failed: ${e?.message ?? e}`)
+        }
+      })
+    },
+
     schema: () => {
       let paths = app.streambundle
         .getAvailablePaths()
@@ -556,6 +587,20 @@ export default function (app: any) {
                   default: 13,
                   minimum: 1,
                   maximum: 252
+                },
+                czoneModuleName: {
+                  type: 'string',
+                  title: 'CZone module name',
+                  description:
+                    'Module label as shown in the CZone Configuration Tool and used as the answer to a system-name query (PGN 65299 query_type 0x87). Also used as the filename for downloaded .zcf files. Optional.',
+                  default: ''
+                },
+                czoneConfigName: {
+                  type: 'string',
+                  title: 'CZone config name',
+                  description:
+                    'Top-level config label written into the .zcf when generating one for download. Defaults to "SignalK Switching <instance>" if empty.',
+                  default: ''
                 }
               }
             }
@@ -859,6 +904,50 @@ export default function (app: any) {
     }
   }
 
+  // Locate the bundled .zcf template that generateZcf uses as a structural
+  // prototype. When the plugin is installed via npm, dist/ sits next to
+  // templates/ inside the package; in development from this repo it's the
+  // same layout. Falls back to scanning a couple of well-known parents.
+  let cachedTemplate: Buffer | undefined
+  function loadZcfTemplate (): Buffer {
+    if (cachedTemplate) return cachedTemplate
+    const candidates = [
+      path.join(__dirname, '..', 'templates', 'template.zcf'),
+      path.join(__dirname, '..', '..', 'templates', 'template.zcf')
+    ]
+    for (const p of candidates) {
+      try {
+        cachedTemplate = fs.readFileSync(p)
+        return cachedTemplate
+      } catch {
+        // try next
+      }
+    }
+    throw new Error(
+      `could not find template.zcf in any of: ${candidates.join(', ')}`
+    )
+  }
+
+  function generateZcfForBank (bank: any): Buffer {
+    const template = loadZcfTemplate()
+    const switches = (bank.switches as string[]) ?? []
+    if (switches.length === 0) {
+      throw new Error(`bank ${bank.instance} has no switches configured`)
+    }
+    const firstCircuitId = bankFirstCircuitId(bank)
+    const dipswitch = bank.czoneEnabled ? bankDipswitch(bank) : 0x18
+    const moduleName = bank.czoneModuleName || `SignalK Bank ${bank.instance}`
+    const spec: ZcfGenSpec = {
+      configName: bank.czoneConfigName || `SignalK Switching ${bank.instance}`,
+      module: { dipswitch, name: moduleName },
+      circuits: switches.map((sw, i) => ({
+        name: switchLabel(sw),
+        circuitId: firstCircuitId + i
+      }))
+    }
+    return generateZcf(spec, template)
+  }
+
   // Push a full .zcf onto the bus as a sequence of PGN 130816 fast-packet
   // frames from the first CZone-enabled bank's source address. Mirrors what
   // a Zeus 3S plotter does when distributing a config — see
@@ -1061,4 +1150,5 @@ interface Plugin {
   name: string
   description: string
   schema: any
+  registerWithRouter?: (router: any) => void
 }
