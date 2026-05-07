@@ -95,8 +95,12 @@ if (reparsed.body.modules.records.length !== 2) {
 const m = reparsed.body.modules.records[0]
 if (m.dipswitch !== spec.module.dipswitch) throw new Error(`module dipswitch = 0x${m.dipswitch.toString(16)}, want 0x${spec.module.dipswitch.toString(16)}`)
 if (m.name !== spec.module.name) throw new Error(`module name = ${m.name}, want ${spec.module.name}`)
-if (reparsed.body.circuits.records.length !== spec.circuits.length) {
-  throw new Error(`generated has ${reparsed.body.circuits.records.length} circuits, want ${spec.circuits.length}`)
+// Generator pads to the module type's output count -- m1=0x0f is 6
+// outputs, so a 3-circuit spec generates 6 circuits (3 user + 3 padded
+// "Spare DC" entries to suppress the "Paralleled with DC1" placeholders
+// the Configuration Tool synthesises for unused outputs).
+if (reparsed.body.circuits.records.length < spec.circuits.length) {
+  throw new Error(`generated has ${reparsed.body.circuits.records.length} circuits, want >= ${spec.circuits.length}`)
 }
 for (let i = 0; i < spec.circuits.length; i++) {
   if (reparsed.body.circuits.records[i].name !== spec.circuits[i].name) {
@@ -261,14 +265,14 @@ console.log(`generator: bankInstance landed in labelled_entities[0].field_b: OK`
 // supplying 1 spec circuit pads to 3 generated circuits so the
 // Configuration Tool doesn't show "DC{n} - Paralleled with DC1" rows.
 // (Test.zcf's module is m1=0x0f, our generated test files inherit it.)
-if (bankParsed.body.circuits.records.length !== 3) {
-  throw new Error(`expected 3 circuits after padding (m1=0x0f -> 3 outputs), got ${bankParsed.body.circuits.records.length}`)
+if (bankParsed.body.circuits.records.length !== 6) {
+  throw new Error(`expected 6 circuits after padding (m1=0x0f -> 6 outputs), got ${bankParsed.body.circuits.records.length}`)
 }
 const paddingNames = bankParsed.body.circuits.records.slice(1).map(c => c.name)
-if (paddingNames[0] !== 'Spare DC2' || paddingNames[1] !== 'Spare DC3') {
+if (paddingNames[0] !== 'Spare DC2' || paddingNames[4] !== 'Spare DC6') {
   throw new Error(`unexpected padding names: ${JSON.stringify(paddingNames)}`)
 }
-console.log(`generator: padded 1 spec circuit -> 3 generated circuits to match module-type output count: OK`)
+console.log(`generator: padded 1 spec circuit -> 6 generated circuits to match m1=0x0f output count: OK`)
 
 // Display Interface + wildcard output: every generated circuit must
 // have a leading outputs[0] with channelAddress = 0x0000 (the "All
@@ -297,5 +301,22 @@ for (const ckt of sidebarParsed.body.circuits.records) {
   }
 }
 console.log(`generator: every circuit has leading wildcard output + Display Interface module preserved: OK`)
+
+// Module type override: spec.module.typeCode rewrites the module's
+// module_specific_value byte. C6 hardware uses m1=0x09 (the
+// Configuration Tool labels its outputs C1..C6). Verify the override
+// lands in the encoded file.
+const c6Spec = {
+  configName: 'C6 Test',
+  module: { dipswitch: 0x18, name: 'C6 Module', typeCode: 0x09 },
+  bankInstance: 0,
+  circuits: [{ name: 'C1 Load', circuitId: 13 }]
+}
+const c6Gen = generateZcf(c6Spec, template)
+const c6Parsed = parseZcfFull(c6Gen)
+if (c6Parsed.body.modules.records[0].moduleSpecificValue !== 0x09) {
+  throw new Error(`m1 typeCode override failed: got 0x${c6Parsed.body.modules.records[0].moduleSpecificValue.toString(16)}, want 0x09`)
+}
+console.log(`generator: typeCode override 0x09 (C6/COI) lands in module_specific_value: OK`)
 
 console.log('\nzcf-encoder test: PASS')

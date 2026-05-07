@@ -686,6 +686,17 @@ export interface ZcfGenSpec {
   module: {
     dipswitch: number                   // 0..255
     name: string                        // module label as shown in CZone tool
+    /**
+     * Module-type code (the modules-section record's
+     * `module_specific_value` byte). Selects how the Configuration
+     * Tool labels the module's physical outputs:
+     *   0x09 = COI / C6 module (outputs labelled C1..C6)
+     *   0x0f = Output Interface (outputs labelled DC1..DC6)
+     *   0x36 = CXP load module (13 outputs)
+     * If omitted, inherits whatever the template's first module
+     * record has (typically 0x0f = Output Interface).
+     */
+    typeCode?: number
   }
   /**
    * Switch Bank Instance, encoded into labelled_entities[0].field_b.
@@ -722,17 +733,23 @@ export interface ZcfGenSpec {
  * generator pads its circuit list up to the expected output count
  * with non-empty placeholder circuits.
  *
- * Values come from cross-referencing real .zcf samples:
- *   m1=0x0f (15) -> 3 outputs (Test.zcf "Emulated Module" had 3 circuits;
- *                   our 1-circuit generated file shows DC1, DC3, DC4 in
- *                   the tool, the unused two as "Paralleled")
- *   m1=0x36 (54) -> 13 outputs (Compass Rose CXP modules had 13 circuits)
- *   m1=0x10 (16) -> N/A (display/MFD; carries no outputs)
- *   m1=0x1d (29) -> N/A (keypad)
+ * Values verified against the Configuration Tool's GetChannelString()
+ * switch in frmZoneSystemConfigurationTool.cs:
+ *   m1=0x09 ( 9) = "C" prefix module (C1..C6) -- this is the C6 hardware
+ *                  ("Combination Output Interface", aka COI). 6 outputs.
+ *   m1=0x0f (15) = DC output module (DC1..DC6). 6 outputs.
+ *   m1=0x10 (16) = Display Interface / MFD / Chartplotter. No outputs.
+ *   m1=0x1c (28) = DC + Input module (paralleled). 16 outputs.
+ *   m1=0x1d (29) = Keypad / Switch input module. 32 inputs (not outputs).
+ *   m1=0x1f (31) = DC + Input module (paralleled). 16 outputs.
+ *   m1=0x36 (54) = CXP module. 13 outputs (per Compass Rose corpus).
  */
 const MODULE_TYPE_OUTPUT_COUNT: { [key: number]: number } = {
-  0x0f: 3,
-  0x36: 13
+  0x09: 6,    // COI / C6
+  0x0f: 6,    // Output Interface (DC1..DC6)
+  0x1c: 16,   // DC + Input
+  0x1f: 16,   // DC + Input
+  0x36: 13    // CXP
 }
 
 /**
@@ -875,7 +892,8 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
     {
       ...moduleProto,
       dipswitch: userDipswitch,
-      name: spec.module.name
+      name: spec.module.name,
+      moduleSpecificValue: spec.module.typeCode ?? moduleProto.moduleSpecificValue
     },
     ...remainingModules
   ]
@@ -887,7 +905,8 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   // "Spare DC2"/"Spare DC3", and no sub-category. Users who want fewer
   // visible outputs should switch to a smaller module type, but we
   // don't know enough types yet to expose that choice.
-  const expectedOutputs = MODULE_TYPE_OUTPUT_COUNT[moduleProto.moduleSpecificValue]
+  const effectiveTypeCode = spec.module.typeCode ?? moduleProto.moduleSpecificValue
+  const expectedOutputs = MODULE_TYPE_OUTPUT_COUNT[effectiveTypeCode]
   let circuitsForGen = spec.circuits
   if (expectedOutputs !== undefined && spec.circuits.length < expectedOutputs) {
     const pad: ZcfGenSpec['circuits'] = []

@@ -628,6 +628,14 @@ export default function (app: any) {
                     'Top-level config label written into the .zcf when generating one for download. Defaults to "SignalK Switching <instance>" if empty.',
                   default: ''
                 },
+                czoneModuleType: {
+                  type: 'string',
+                  title: 'CZone module type',
+                  description:
+                    'Which kind of module the CZone Configuration Tool should render this bank as. "oi" = Output Interface (DC1..DC6 outputs, the default). "coi" = Combination Output Interface, also known as C6 (outputs labelled C1..C6). "cxp" = larger CXP load module (13 outputs). Pick the one matching your real hardware.',
+                  enum: ['oi', 'coi', 'cxp'],
+                  default: 'oi'
+                },
                 czoneSubCategories: {
                   type: 'array',
                   title: 'CZone sub-categories per switch (optional)',
@@ -993,9 +1001,14 @@ export default function (app: any) {
     const dipswitch = bank.czoneEnabled ? bankDipswitch(bank) : 0x18
     const moduleName = bank.czoneModuleName || `SignalK Bank ${bank.instance}`
     const subCats = (bank.czoneSubCategories as string[]) ?? []
+    // typeCode picks how the Configuration Tool labels the module's
+    // outputs: 'oi' (the default 6-DC Output Interface), 'coi' (the
+    // C6 / Combination Output Interface, outputs labelled C1..C6).
+    const typeKey = (bank.czoneModuleType as string) || 'oi'
+    const typeCode = typeKey === 'coi' ? 0x09 : typeKey === 'cxp' ? 0x36 : 0x0f
     const spec: ZcfGenSpec = {
       configName: bank.czoneConfigName || `SignalK Switching ${bank.instance}`,
-      module: { dipswitch, name: moduleName },
+      module: { dipswitch, name: moduleName, typeCode },
       bankInstance: bank.instance & 0xff,
       circuits: switches.map((sw, i) => {
         const subKey = subCats[i] ?? 'none'
