@@ -744,10 +744,29 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   //     from the template's first dref's display_address)
   // The matching circuit_ids record uses the same display_address as
   // its channel_address so the firmware links circuit -> circuit_id.
+  //
+  // **Critical:** both `output.channelAddress` and `dref.displayAddress`
+  // (and the matching `circuit_id.channelAddress`) are dipswitch-namespaced:
+  // their HIGH byte is the dipswitch of the module that owns the channel
+  // (verified against Test.zcf: module dipswitch 0x01 owns outputs
+  // 0x011e..0x0120 and drefs 0x0100..0x0102; config-6.zcf: module dipswitch
+  // 0x02 owns outputs 0x021e..0x0222 and drefs 0x0200..0x0204). When we
+  // change the module's dipswitch to whatever the user picked we MUST
+  // rewrite the high byte of every channel address to match -- otherwise
+  // the CZone Configuration Tool's GetChannelString() lookup fails and the
+  // tool crashes with a NullReferenceException when the user clicks the
+  // circuit (observed: bank-16 download with dipswitch=0x08 produced
+  // outputs at 0x011e which the tool tried to resolve against dipswitch
+  // 0x01, found no module, and crashed in UpdateLvCircuitOutputs).
   const circuitProto = parsed.body.circuits.records[0]
   const cidProto = parsed.body.circuitIds.records[0]
-  const outBaseChan = circuitProto.outputs[0]?.channelAddress ?? 0x011e
-  const drefBaseAddr = circuitProto.displayRefs[0]?.displayAddress ?? 0x0100
+  const protoOutChan = circuitProto.outputs[0]?.channelAddress ?? 0x011e
+  const protoDrefAddr = circuitProto.displayRefs[0]?.displayAddress ?? 0x0100
+  // Re-namespace the low byte of the template's output and display ranges
+  // under the user's chosen dipswitch.
+  const dipHi = (spec.module.dipswitch & 0xff) << 8
+  const outBaseChan = (dipHi | (protoOutChan & 0xff)) & 0xffff
+  const drefBaseAddr = (dipHi | (protoDrefAddr & 0xff)) & 0xffff
   const indexBase = circuitProto.circuitIndex
 
   parsed.body.circuits.records = spec.circuits.map((c, i) => ({
