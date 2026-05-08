@@ -530,7 +530,8 @@ export default function (app: any) {
           res.send(zcf)
         } catch (e) {
           error(e)
-          res.status(500).send(`zcf generation failed: ${e?.message ?? e}`)
+          const msg = e instanceof Error ? e.message : String(e)
+          res.status(500).send(`zcf generation failed: ${msg}`)
         }
       })
     },
@@ -1133,7 +1134,7 @@ export default function (app: any) {
           return {
             state: 'COMPLETED',
             statusCode: 500,
-            message: e?.message ?? String(e)
+            message: e instanceof Error ? e.message : String(e)
           }
         }
       }
