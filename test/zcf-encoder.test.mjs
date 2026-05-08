@@ -261,6 +261,23 @@ if (fieldB !== 16) {
 }
 console.log(`generator: bankInstance landed in labelled_entities[0].field_b: OK`)
 
+// Empty labelled-entity name hangs the plotter (czone-spec/spec/zcf-parser.md
+// "Pathological-input hangs"). The generator must refuse to emit such a file.
+let emptyNameRejected = false
+try {
+  generateZcf({ ...bankSpec, module: { ...bankSpec.module, name: '' } }, template)
+} catch (err) {
+  if (/empty name hangs the plotter|labelled_entities name must be at least 1 byte/i.test(err.message)) {
+    emptyNameRejected = true
+  } else {
+    throw err
+  }
+}
+if (!emptyNameRejected) {
+  throw new Error('empty module name should have thrown; generator emitted a hang-inducing .zcf')
+}
+console.log(`generator: empty labelled-entity name is refused (plotter-hang guard): OK`)
+
 // Paralleled-output suppression: with module type m1=0x0f (3 outputs),
 // supplying 1 spec circuit pads to 3 generated circuits so the
 // Configuration Tool doesn't show "DC{n} - Paralleled with DC1" rows.
@@ -303,43 +320,49 @@ for (const ckt of sidebarParsed.body.circuits.records) {
 console.log(`generator: every circuit has leading wildcard output + Display Interface module preserved: OK`)
 
 // Module type override: spec.module.typeCode rewrites the module's
-// module_specific_value byte. Two distinct CZone hardware families
-// share C-prefix labels but have very different output counts:
-//   m1=0x09 (Contact 6 / Contact 6 Plus, 80-911-0140-00 / -0160-00)
-//          -- 6 dry-contact outputs C1..C6.
-//   m1=0x1c (modern Combination Output Interface, 80-911-0119-00)
-//          -- 16 outputs (4 high-current DC1..DC4 + 12 dimmable
-//          DC5..DC16). This is what the plugin's "coi" schema
-//          option targets, since users typically want max channels.
-const contact6Spec = {
-  configName: 'Contact 6 Test',
-  module: { dipswitch: 0x18, name: 'Contact 6', typeCode: 0x09 },
+// module_specific_value byte. Three of the four currently-known type
+// codes are exercised here -- each one was verified by importing a
+// generated file in the CZone Configuration Tool on Windows and
+// reading the Modules tab tree label:
+//   m1=0x0f -> "Output Interface", 6 outputs (the default, exercised
+//              by every generator test above)
+//   m1=0x1c -> "Control 1", 16 outputs (80-911-0122-00). A separate
+//              Mastervolt product that shares COI's 16-channel
+//              layout but has its own hardware identity.
+//   m1=0x1f -> "Combination Output Interface", 16 outputs DC1..DC16
+//              (modern hardware: 4 high-current + 12 dimmable, 150A
+//              max). Parts 80-911-0119-00 (modern) / 80-911-0120-00
+//              (legacy).
+const control1Spec = {
+  configName: 'Control 1 Test',
+  module: { dipswitch: 0x10, name: 'Control 1', typeCode: 0x1c },
   bankInstance: 0,
-  circuits: [{ name: 'C1 Load', circuitId: 13 }]
+  circuits: [{ name: 'DC1 Load', circuitId: 13 }]
 }
-const contact6Gen = generateZcf(contact6Spec, template)
-const contact6Parsed = parseZcfFull(contact6Gen)
-if (contact6Parsed.body.modules.records[0].moduleSpecificValue !== 0x09) {
-  throw new Error(`Contact 6 typeCode override failed: got 0x${contact6Parsed.body.modules.records[0].moduleSpecificValue.toString(16)}, want 0x09`)
+const control1Gen = generateZcf(control1Spec, template)
+const control1Parsed = parseZcfFull(control1Gen)
+if (control1Parsed.body.modules.records[0].moduleSpecificValue !== 0x1c) {
+  throw new Error(`Control 1 typeCode override failed: got 0x${control1Parsed.body.modules.records[0].moduleSpecificValue.toString(16)}, want 0x1c`)
 }
-console.log(`generator: typeCode override 0x09 (Contact 6, 6 outputs) lands in module_specific_value: OK`)
+if (control1Parsed.body.circuits.records.length !== 16) {
+  throw new Error(`Control 1 1-circuit spec should pad to 16 circuits, got ${control1Parsed.body.circuits.records.length}`)
+}
+console.log(`generator: typeCode override 0x1c (Control 1, 16 outputs) pads to 16 circuits: OK`)
 
 const coiSpec = {
   configName: 'COI 16-Channel Test',
-  module: { dipswitch: 0x10, name: '16-CH COI', typeCode: 0x1c },
+  module: { dipswitch: 0x21, name: 'COI 16-CH', typeCode: 0x1f },
   bankInstance: 1,
   circuits: [{ name: 'High Current 1', circuitId: 13 }]
 }
 const coiGen = generateZcf(coiSpec, template)
 const coiParsed = parseZcfFull(coiGen)
-if (coiParsed.body.modules.records[0].moduleSpecificValue !== 0x1c) {
-  throw new Error(`COI typeCode override failed: got 0x${coiParsed.body.modules.records[0].moduleSpecificValue.toString(16)}, want 0x1c`)
+if (coiParsed.body.modules.records[0].moduleSpecificValue !== 0x1f) {
+  throw new Error(`COI typeCode override failed: got 0x${coiParsed.body.modules.records[0].moduleSpecificValue.toString(16)}, want 0x1f`)
 }
-// MODULE_TYPE_OUTPUT_COUNT[0x1c] = 16, so a 1-circuit spec should pad
-// to 16 generated circuits (1 user + 15 placeholders).
 if (coiParsed.body.circuits.records.length !== 16) {
-  throw new Error(`COI 1-circuit spec should pad to 16 circuits (modern COI has 16 outputs), got ${coiParsed.body.circuits.records.length}`)
+  throw new Error(`COI 1-circuit spec should pad to 16 circuits, got ${coiParsed.body.circuits.records.length}`)
 }
-console.log(`generator: typeCode override 0x1c (modern COI, 16 outputs) pads to 16 circuits: OK`)
+console.log(`generator: typeCode override 0x1f (COI, 16 outputs) pads to 16 circuits: OK`)
 
 console.log('\nzcf-encoder test: PASS')

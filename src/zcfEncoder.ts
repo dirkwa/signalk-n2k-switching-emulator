@@ -65,7 +65,7 @@ export function crc32Lo20 (data: Buffer): number {
 export interface ZcfHeader {
   version: number
   reservedByte9: number
-  unknown_10_13: Buffer  // 4 bytes; observed zero in our corpus
+  unknown_10_13: Buffer // 4 bytes; observed zero in our corpus
 }
 
 export interface ConfigName {
@@ -75,15 +75,15 @@ export interface ConfigName {
 
 export interface ModuleRecord {
   dipswitch: number
-  moduleSpecificValue: number   // wire byte 1
-  moduleSpecificValue2: number  // wire byte 2
-  nameFlag: number              // bit 7 of byte 3
+  moduleSpecificValue: number // wire byte 1
+  moduleSpecificValue2: number // wire byte 2
+  nameFlag: number // bit 7 of byte 3
   name: string
   trailer: number
 }
 
 export interface ModulesSection {
-  sectionTag: number  // = 0x05
+  sectionTag: number // = 0x05
   records: ModuleRecord[]
 }
 
@@ -95,29 +95,29 @@ export interface BacklightZoneRecord {
 }
 
 export interface BacklightZonesSection {
-  sectionTag: number  // = 0x04
+  sectionTag: number // = 0x04
   records: BacklightZoneRecord[]
 }
 
 export interface GlobalConfigBlock {
   metadataTotalByteCount: number
-  metadataStrings: string[]   // always 5 entries
+  metadataStrings: string[] // always 5 entries
   flagsByte: number
-  subBlocks: Buffer[]         // 6 entries, each 33 bytes
+  subBlocks: Buffer[] // 6 entries, each 33 bytes
 }
 
 export interface OutputRecord {
   channelAddress: number
-  flagsBytes: Buffer  // 5 bytes
+  flagsBytes: Buffer // 5 bytes
   name: string
 }
 
 export interface DisplayRefRecord {
   displayAddress: number
   flagsA: number
-  flagsB: number      // bit 2 indicates transient
+  flagsB: number // bit 2 indicates transient
   transient: boolean
-  extra: Buffer       // 1 byte for normal, 10 bytes for transient
+  extra: Buffer // 1 byte for normal, 10 bytes for transient
 }
 
 export interface CircuitRecord {
@@ -131,20 +131,20 @@ export interface CircuitRecord {
 }
 
 export interface CircuitsSection {
-  sectionTag: number  // = 0x08
-  formatHints: Buffer  // 3 bytes, expected = 08 05 0E
+  sectionTag: number // = 0x08
+  formatHints: Buffer // 3 bytes, expected = 08 05 0E
   records: CircuitRecord[]
 }
 
 export interface CircuitIdRecord {
   channelAddress: number
-  flags: Buffer       // 11 bytes
-  circuitId: number   // u32 user-set ID
+  flags: Buffer // 11 bytes
+  circuitId: number // u32 user-set ID
   name: string
 }
 
 export interface CircuitIdsSection {
-  sectionTag: number  // = 0x12
+  sectionTag: number // = 0x12
   records: CircuitIdRecord[]
 }
 
@@ -152,7 +152,7 @@ export interface TrailingSection {
   sectionPayloadSize: number
   recordCount: number
   sectionTag: number
-  payload: Buffer    // bytes after the 7-byte header (size = sectionPayloadSize - 3)
+  payload: Buffer // bytes after the 7-byte header (size = sectionPayloadSize - 3)
 }
 
 export interface ZcfBody {
@@ -182,14 +182,20 @@ const CIRCUIT_IDS_SECTION_TAG = 0x12
 
 const GLOBAL_CONFIG_SUBBLOCK_COUNT = 6
 const GLOBAL_CONFIG_SUBBLOCK_SIZE = 33
-const GLOBAL_CONFIG_BLOCK_SIZE = 6 + 1 + GLOBAL_CONFIG_SUBBLOCK_COUNT * GLOBAL_CONFIG_SUBBLOCK_SIZE  // 205
+// Variable-length metadata-strings header + 1 flags byte + 6 fixed 33-byte sub-blocks.
+// When all 5 metadata strings are empty the header is 6 bytes and the block totals 205;
+// real-world configs with populated strings produce a larger block.
+const GLOBAL_CONFIG_FIXED_TAIL_SIZE =
+  1 + GLOBAL_CONFIG_SUBBLOCK_COUNT * GLOBAL_CONFIG_SUBBLOCK_SIZE // 199
 const GLOBAL_CONFIG_SUBBLOCK_MARKER = 0x20
 
 // --------------------------------- parser ---------------------------------
 
 export function parseHeader (data: Buffer): ZcfHeader {
   if (data.length < HEADER_SIZE + 1) {
-    throw new Error(`file too short: ${data.length} bytes (need at least ${HEADER_SIZE + 1})`)
+    throw new Error(
+      `file too short: ${data.length} bytes (need at least ${HEADER_SIZE + 1})`
+    )
   }
   return {
     version: data[0],
@@ -198,9 +204,14 @@ export function parseHeader (data: Buffer): ZcfHeader {
   }
 }
 
-function parseConfigName (data: Buffer, offset: number): { value: ConfigName; next: number } {
+function parseConfigName (
+  data: Buffer,
+  offset: number
+): { value: ConfigName; next: number } {
   if (offset >= data.length) {
-    throw new Error(`config name offset ${offset} past end of data (${data.length} bytes)`)
+    throw new Error(
+      `config name offset ${offset} past end of data (${data.length} bytes)`
+    )
   }
   const length = data[offset]
   const end = offset + 1 + length
@@ -213,7 +224,10 @@ function parseConfigName (data: Buffer, offset: number): { value: ConfigName; ne
   }
 }
 
-function parseModulesSection (data: Buffer, offset: number): { value: ModulesSection; next: number } {
+function parseModulesSection (
+  data: Buffer,
+  offset: number
+): { value: ModulesSection; next: number } {
   if (offset + 7 > data.length) {
     throw new Error(`modules section header runs past end at offset ${offset}`)
   }
@@ -221,16 +235,21 @@ function parseModulesSection (data: Buffer, offset: number): { value: ModulesSec
   const recordCount = data.readUInt16LE(offset + 4)
   const sectionTag = data[offset + 6]
   if (sectionTag !== MODULES_SECTION_TAG) {
-    throw new Error(`expected modules tag 0x05, got 0x${sectionTag.toString(16)}`)
+    throw new Error(
+      `expected modules tag 0x05, got 0x${sectionTag.toString(16)}`
+    )
   }
   const sectionEnd = offset + 4 + sectionPayloadSize
   if (sectionEnd > data.length) {
-    throw new Error(`modules section claims to end at ${sectionEnd} but file is ${data.length} bytes`)
+    throw new Error(
+      `modules section claims to end at ${sectionEnd} but file is ${data.length} bytes`
+    )
   }
   let o = offset + 7
   const records: ModuleRecord[] = []
   for (let i = 0; i < recordCount; i++) {
-    if (o + 5 > sectionEnd) throw new Error(`module record ${i} header past section end`)
+    if (o + 5 > sectionEnd)
+      throw new Error(`module record ${i} header past section end`)
     const dipswitch = data[o]
     const b1 = data[o + 1]
     const b2 = data[o + 2]
@@ -238,7 +257,8 @@ function parseModulesSection (data: Buffer, offset: number): { value: ModulesSec
     const nameLen = b3 & 0x7f
     const nameFlag = (b3 >> 7) & 1
     const nameEnd = o + 4 + nameLen
-    if (nameEnd + 1 > sectionEnd) throw new Error(`module record ${i} runs past section end`)
+    if (nameEnd + 1 > sectionEnd)
+      throw new Error(`module record ${i} runs past section end`)
     const name = data.slice(o + 4, nameEnd).toString('ascii')
     const trailer = data[nameEnd]
     records.push({
@@ -251,17 +271,26 @@ function parseModulesSection (data: Buffer, offset: number): { value: ModulesSec
     })
     o = nameEnd + 1
   }
-  if (o !== sectionEnd) throw new Error(`modules section size drift: parsed ${o}, ends at ${sectionEnd}`)
+  if (o !== sectionEnd)
+    throw new Error(
+      `modules section size drift: parsed ${o}, ends at ${sectionEnd}`
+    )
   return { value: { sectionTag, records }, next: sectionEnd }
 }
 
-function parseBacklightZonesSection (data: Buffer, offset: number): { value: BacklightZonesSection; next: number } {
-  if (offset + 7 > data.length) throw new Error(`backlight zones header past end at ${offset}`)
+function parseBacklightZonesSection (
+  data: Buffer,
+  offset: number
+): { value: BacklightZonesSection; next: number } {
+  if (offset + 7 > data.length)
+    throw new Error(`backlight zones header past end at ${offset}`)
   const sectionPayloadSize = data.readUInt32LE(offset)
   const recordCount = data.readUInt16LE(offset + 4)
   const sectionTag = data[offset + 6]
   if (sectionTag !== BACKLIGHT_ZONES_SECTION_TAG) {
-    throw new Error(`expected backlight tag 0x04, got 0x${sectionTag.toString(16)}`)
+    throw new Error(
+      `expected backlight tag 0x04, got 0x${sectionTag.toString(16)}`
+    )
   }
   const sectionEnd = offset + 4 + sectionPayloadSize
   let o = offset + 7
@@ -270,7 +299,8 @@ function parseBacklightZonesSection (data: Buffer, offset: number): { value: Bac
     if (o + 4 > sectionEnd) throw new Error(`bz record ${i} past section end`)
     const nameLen = data[o]
     const nameEnd = o + 1 + nameLen
-    if (nameEnd + 3 > sectionEnd) throw new Error(`bz record ${i} runs past section end`)
+    if (nameEnd + 3 > sectionEnd)
+      throw new Error(`bz record ${i} runs past section end`)
     const name = data.slice(o + 1, nameEnd).toString('ascii')
     records.push({
       name,
@@ -284,49 +314,78 @@ function parseBacklightZonesSection (data: Buffer, offset: number): { value: Bac
   return { value: { sectionTag, records }, next: sectionEnd }
 }
 
-function parseGlobalConfigBlock (data: Buffer, offset: number): { value: GlobalConfigBlock; next: number } {
-  if (offset + GLOBAL_CONFIG_BLOCK_SIZE > data.length) {
+function parseGlobalConfigBlock (
+  data: Buffer,
+  offset: number
+): { value: GlobalConfigBlock; next: number } {
+  if (offset + 1 > data.length)
     throw new Error(`global config block past end at ${offset}`)
-  }
   const metadataTotalByteCount = data[offset]
+  if (metadataTotalByteCount < 6) {
+    throw new Error(
+      `metadata_total_byte_count ${metadataTotalByteCount} at offset ${offset}: ` +
+        `must be >= 6 (count byte + 5 length bytes)`
+    )
+  }
+  const metadataEnd = offset + metadataTotalByteCount
   let o = offset + 1
   const metadataStrings: string[] = []
-  let consumed = 1
   for (let i = 0; i < 5; i++) {
-    if (o + 1 > data.length) throw new Error(`metadata string ${i} length past end`)
+    if (o + 1 > metadataEnd)
+      throw new Error(`metadata string ${i} length past metadata header end`)
     const ln = data[o]
-    if (o + 1 + ln > data.length) throw new Error(`metadata string ${i} body past end`)
+    if (o + 1 + ln > metadataEnd) {
+      throw new Error(
+        `metadata string ${i} body (len ${ln}) past metadata header end ${metadataEnd}`
+      )
+    }
     metadataStrings.push(data.slice(o + 1, o + 1 + ln).toString('ascii'))
-    consumed += 1 + ln
     o += 1 + ln
   }
-  if (consumed !== metadataTotalByteCount) {
-    throw new Error(`metadata total ${metadataTotalByteCount} != actual ${consumed}`)
+  if (o !== metadataEnd) {
+    throw new Error(
+      `metadata strings under-consume header: at ${o}, header ends at ${metadataEnd}`
+    )
+  }
+  const end = metadataEnd + GLOBAL_CONFIG_FIXED_TAIL_SIZE
+  if (end > data.length) {
+    throw new Error(
+      `global config block fixed tail past end: needs ${end} bytes, file has ${data.length}`
+    )
   }
   const flagsByte = data[o]
   o += 1
   const subBlocks: Buffer[] = []
   for (let i = 0; i < GLOBAL_CONFIG_SUBBLOCK_COUNT; i++) {
     const block = data.slice(o, o + GLOBAL_CONFIG_SUBBLOCK_SIZE)
-    if (block.length !== GLOBAL_CONFIG_SUBBLOCK_SIZE) throw new Error(`sub-block ${i} truncated`)
+    if (block.length !== GLOBAL_CONFIG_SUBBLOCK_SIZE)
+      throw new Error(`sub-block ${i} truncated`)
     if (block[0] !== GLOBAL_CONFIG_SUBBLOCK_MARKER) {
-      throw new Error(`sub-block ${i}: expected marker 0x20, got 0x${block[0].toString(16)}`)
+      throw new Error(
+        `sub-block ${i}: expected marker 0x20, got 0x${block[0].toString(16)}`
+      )
     }
     subBlocks.push(block)
     o += GLOBAL_CONFIG_SUBBLOCK_SIZE
   }
   return {
     value: { metadataTotalByteCount, metadataStrings, flagsByte, subBlocks },
-    next: offset + GLOBAL_CONFIG_BLOCK_SIZE
+    next: end
   }
 }
 
-function parseOutputsSubsection (data: Buffer, offset: number, sectionEnd: number): { records: OutputRecord[]; next: number } {
-  if (offset + 6 > sectionEnd) throw new Error(`outputs subsec header past section end`)
+function parseOutputsSubsection (
+  data: Buffer,
+  offset: number,
+  sectionEnd: number
+): { records: OutputRecord[]; next: number } {
+  if (offset + 6 > sectionEnd)
+    throw new Error(`outputs subsec header past section end`)
   const payloadSize = data.readUInt32LE(offset)
   const count = data.readUInt16LE(offset + 4)
   const subEnd = offset + 4 + payloadSize
-  if (subEnd > sectionEnd) throw new Error(`outputs subsec ends past section end`)
+  if (subEnd > sectionEnd)
+    throw new Error(`outputs subsec ends past section end`)
   let o = offset + 6
   const records: OutputRecord[] = []
   for (let i = 0; i < count; i++) {
@@ -334,7 +393,8 @@ function parseOutputsSubsection (data: Buffer, offset: number, sectionEnd: numbe
     const channelAddress = data.readUInt16LE(o)
     const flagsBytes = data.slice(o + 2, o + 7)
     const nameLen = data[o + 7]
-    if (o + 8 + nameLen > subEnd) throw new Error(`output ${i} name past subsec`)
+    if (o + 8 + nameLen > subEnd)
+      throw new Error(`output ${i} name past subsec`)
     const name = data.slice(o + 8, o + 8 + nameLen).toString('ascii')
     records.push({ channelAddress, flagsBytes, name })
     o += 8 + nameLen
@@ -343,8 +403,13 @@ function parseOutputsSubsection (data: Buffer, offset: number, sectionEnd: numbe
   return { records, next: subEnd }
 }
 
-function parseDisplayRefsSubsection (data: Buffer, offset: number, sectionEnd: number): { records: DisplayRefRecord[]; next: number } {
-  if (offset + 6 > sectionEnd) throw new Error(`drefs subsec header past section end`)
+function parseDisplayRefsSubsection (
+  data: Buffer,
+  offset: number,
+  sectionEnd: number
+): { records: DisplayRefRecord[]; next: number } {
+  if (offset + 6 > sectionEnd)
+    throw new Error(`drefs subsec header past section end`)
   const payloadSize = data.readUInt32LE(offset)
   const count = data.readUInt16LE(offset + 4)
   const subEnd = offset + 4 + payloadSize
@@ -367,27 +432,36 @@ function parseDisplayRefsSubsection (data: Buffer, offset: number, sectionEnd: n
   return { records, next: subEnd }
 }
 
-function parseCircuitsSection (data: Buffer, offset: number): { value: CircuitsSection; next: number } {
-  if (offset + 10 > data.length) throw new Error(`circuits section header past end`)
+function parseCircuitsSection (
+  data: Buffer,
+  offset: number
+): { value: CircuitsSection; next: number } {
+  if (offset + 10 > data.length)
+    throw new Error(`circuits section header past end`)
   const sectionPayloadSize = data.readUInt32LE(offset)
   const recordCount = data.readUInt16LE(offset + 4)
   const sectionTag = data[offset + 6]
-  if (sectionTag !== CIRCUITS_SECTION_TAG) throw new Error(`expected circuits tag 0x08`)
+  if (sectionTag !== CIRCUITS_SECTION_TAG)
+    throw new Error(`expected circuits tag 0x08`)
   const formatHints = data.slice(offset + 7, offset + 10)
   if (!formatHints.equals(CIRCUITS_FORMAT_HINTS)) {
-    throw new Error(`unexpected circuits format_hints ${formatHints.toString('hex')}`)
+    throw new Error(
+      `unexpected circuits format_hints ${formatHints.toString('hex')}`
+    )
   }
   const sectionEnd = offset + 4 + sectionPayloadSize
   let o = offset + 10
   const records: CircuitRecord[] = []
   for (let i = 0; i < recordCount; i++) {
-    if (o + 8 > sectionEnd) throw new Error(`circuit ${i} header past section end`)
+    if (o + 8 > sectionEnd)
+      throw new Error(`circuit ${i} header past section end`)
     const circuitIndex = data.readUInt16LE(o)
     const flagsA = data[o + 2]
     const flagsB = data.readUInt16LE(o + 3)
     const field2a = data.readUInt16LE(o + 5)
     const nameLen = data[o + 7]
-    if (o + 8 + nameLen > sectionEnd) throw new Error(`circuit ${i} name past section`)
+    if (o + 8 + nameLen > sectionEnd)
+      throw new Error(`circuit ${i} name past section`)
     const name = data.slice(o + 8, o + 8 + nameLen).toString('utf8')
     let cur = o + 8 + nameLen
     const outputsRes = parseOutputsSubsection(data, cur, sectionEnd)
@@ -409,22 +483,28 @@ function parseCircuitsSection (data: Buffer, offset: number): { value: CircuitsS
   return { value: { sectionTag, formatHints, records }, next: sectionEnd }
 }
 
-function parseCircuitIdsSection (data: Buffer, offset: number): { value: CircuitIdsSection; next: number } {
+function parseCircuitIdsSection (
+  data: Buffer,
+  offset: number
+): { value: CircuitIdsSection; next: number } {
   if (offset + 7 > data.length) throw new Error(`circuit_ids header past end`)
   const sectionPayloadSize = data.readUInt32LE(offset)
   const recordCount = data.readUInt16LE(offset + 4)
   const sectionTag = data[offset + 6]
-  if (sectionTag !== CIRCUIT_IDS_SECTION_TAG) throw new Error(`expected circuit_ids tag 0x12`)
+  if (sectionTag !== CIRCUIT_IDS_SECTION_TAG)
+    throw new Error(`expected circuit_ids tag 0x12`)
   const sectionEnd = offset + 4 + sectionPayloadSize
   let o = offset + 7
   const records: CircuitIdRecord[] = []
   for (let i = 0; i < recordCount; i++) {
-    if (o + 18 > sectionEnd) throw new Error(`circuit_ids ${i} header past section`)
+    if (o + 18 > sectionEnd)
+      throw new Error(`circuit_ids ${i} header past section`)
     const channelAddress = data.readUInt16LE(o)
     const flags = data.slice(o + 2, o + 13)
     const circuitId = data.readUInt32LE(o + 13)
     const nameLen = data[o + 17]
-    if (o + 18 + nameLen > sectionEnd) throw new Error(`circuit_ids ${i} name past section`)
+    if (o + 18 + nameLen > sectionEnd)
+      throw new Error(`circuit_ids ${i} name past section`)
     const name = data.slice(o + 18, o + 18 + nameLen).toString('utf8')
     records.push({ channelAddress, flags, circuitId, name })
     o += 18 + nameLen
@@ -433,7 +513,11 @@ function parseCircuitIdsSection (data: Buffer, offset: number): { value: Circuit
   return { value: { sectionTag, records }, next: sectionEnd }
 }
 
-function parseTrailingSections (data: Buffer, offset: number, end: number): TrailingSection[] {
+function parseTrailingSections (
+  data: Buffer,
+  offset: number,
+  end: number
+): TrailingSection[] {
   const sections: TrailingSection[] = []
   let o = offset
   while (o + 7 <= end) {
@@ -442,7 +526,11 @@ function parseTrailingSections (data: Buffer, offset: number, end: number): Trai
     const sectionTag = data[o + 6]
     const sectionEnd = o + 4 + sectionPayloadSize
     if (sectionEnd > end) {
-      throw new Error(`trailing section at ${o} (tag 0x${sectionTag.toString(16)}) past trailing area end ${end}`)
+      throw new Error(
+        `trailing section at ${o} (tag 0x${sectionTag.toString(
+          16
+        )}) past trailing area end ${end}`
+      )
     }
     sections.push({
       sectionPayloadSize,
@@ -452,20 +540,27 @@ function parseTrailingSections (data: Buffer, offset: number, end: number): Trai
     })
     o = sectionEnd
   }
-  if (o !== end) throw new Error(`trailing sections did not consume entire range`)
+  if (o !== end)
+    throw new Error(`trailing sections did not consume entire range`)
   return sections
 }
 
 export function parseZcfFull (data: Buffer): ParsedZcf {
   const header = parseHeader(data)
   let next = CONFIG_NAME_OFFSET
-  const cn = parseConfigName(data, next); next = cn.next
-  const mods = parseModulesSection(data, next); next = mods.next
-  const bz = parseBacklightZonesSection(data, next); next = bz.next
-  const gc = parseGlobalConfigBlock(data, next); next = gc.next
-  const circ = parseCircuitsSection(data, next); next = circ.next
-  const cids = parseCircuitIdsSection(data, next); next = cids.next
-  const trailingEnd = data.length - 1  // last byte is trailing CRC8
+  const cn = parseConfigName(data, next)
+  next = cn.next
+  const mods = parseModulesSection(data, next)
+  next = mods.next
+  const bz = parseBacklightZonesSection(data, next)
+  next = bz.next
+  const gc = parseGlobalConfigBlock(data, next)
+  next = gc.next
+  const circ = parseCircuitsSection(data, next)
+  next = circ.next
+  const cids = parseCircuitIdsSection(data, next)
+  next = cids.next
+  const trailingEnd = data.length - 1 // last byte is trailing CRC8
   const trailing = parseTrailingSections(data, next, trailingEnd)
   return {
     header,
@@ -485,7 +580,10 @@ export function parseZcfFull (data: Buffer): ParsedZcf {
 
 function encodeConfigName (cn: ConfigName): Buffer {
   const body = Buffer.from(cn.name, 'ascii')
-  if (body.length !== cn.length) throw new Error(`config name length mismatch ${body.length} != ${cn.length}`)
+  if (body.length !== cn.length)
+    throw new Error(
+      `config name length mismatch ${body.length} != ${cn.length}`
+    )
   return Buffer.concat([Buffer.from([cn.length]), body])
 }
 
@@ -495,7 +593,14 @@ function encodeModulesSection (s: ModulesSection): Buffer {
     const nameBytes = Buffer.from(r.name, 'ascii')
     const nameLen = nameBytes.length
     const b3 = (nameLen & 0x7f) | ((r.nameFlag & 1) << 7)
-    parts.push(Buffer.from([r.dipswitch, r.moduleSpecificValue, r.moduleSpecificValue2, b3]))
+    parts.push(
+      Buffer.from([
+        r.dipswitch,
+        r.moduleSpecificValue,
+        r.moduleSpecificValue2,
+        b3
+      ])
+    )
     parts.push(nameBytes)
     parts.push(Buffer.from([r.trailer]))
   }
@@ -526,21 +631,38 @@ function encodeBacklightZonesSection (s: BacklightZonesSection): Buffer {
 }
 
 function encodeGlobalConfigBlock (g: GlobalConfigBlock): Buffer {
+  if (g.metadataStrings.length !== 5) {
+    throw new Error(
+      `expected 5 metadata strings, got ${g.metadataStrings.length}`
+    )
+  }
   const parts: Buffer[] = []
   parts.push(Buffer.from([g.metadataTotalByteCount]))
+  let metadataConsumed = 1
   for (const s of g.metadataStrings) {
     const sb = Buffer.from(s, 'ascii')
     parts.push(Buffer.from([sb.length]))
     parts.push(sb)
+    metadataConsumed += 1 + sb.length
+  }
+  if (metadataConsumed !== g.metadataTotalByteCount) {
+    throw new Error(
+      `metadata strings encoded to ${metadataConsumed} bytes, ` +
+        `metadataTotalByteCount says ${g.metadataTotalByteCount}`
+    )
   }
   parts.push(Buffer.from([g.flagsByte]))
   for (const sb of g.subBlocks) {
-    if (sb.length !== GLOBAL_CONFIG_SUBBLOCK_SIZE) throw new Error('sub-block wrong size')
+    if (sb.length !== GLOBAL_CONFIG_SUBBLOCK_SIZE)
+      throw new Error('sub-block wrong size')
     parts.push(sb)
   }
   const out = Buffer.concat(parts)
-  if (out.length !== GLOBAL_CONFIG_BLOCK_SIZE) {
-    throw new Error(`global config block encoded to ${out.length}, expected ${GLOBAL_CONFIG_BLOCK_SIZE}`)
+  const expected = g.metadataTotalByteCount + GLOBAL_CONFIG_FIXED_TAIL_SIZE
+  if (out.length !== expected) {
+    throw new Error(
+      `global config block encoded to ${out.length}, expected ${expected}`
+    )
   }
   return out
 }
@@ -549,10 +671,16 @@ function encodeOutputsSubsection (outs: OutputRecord[]): Buffer {
   const body = Buffer.concat(
     outs.map(o => {
       const nameBytes = Buffer.from(o.name, 'ascii')
-      if (o.flagsBytes.length !== 5) throw new Error('output flags must be 5 bytes')
+      if (o.flagsBytes.length !== 5)
+        throw new Error('output flags must be 5 bytes')
       const head = Buffer.alloc(2)
       head.writeUInt16LE(o.channelAddress, 0)
-      return Buffer.concat([head, o.flagsBytes, Buffer.from([nameBytes.length]), nameBytes])
+      return Buffer.concat([
+        head,
+        o.flagsBytes,
+        Buffer.from([nameBytes.length]),
+        nameBytes
+      ])
     })
   )
   const payloadSize = 2 + body.length
@@ -571,7 +699,9 @@ function encodeDisplayRefsSubsection (drefs: DisplayRefRecord[]): Buffer {
       head[3] = d.flagsB
       const expectedExtra = d.transient ? 10 : 1
       if (d.extra.length !== expectedExtra) {
-        throw new Error(`dref extra must be ${expectedExtra} bytes (got ${d.extra.length})`)
+        throw new Error(
+          `dref extra must be ${expectedExtra} bytes (got ${d.extra.length})`
+        )
       }
       return Buffer.concat([head, d.extra])
     })
@@ -600,7 +730,10 @@ function encodeCircuitRecord (r: CircuitRecord): Buffer {
 }
 
 function encodeCircuitsSection (s: CircuitsSection): Buffer {
-  const body = Buffer.concat([s.formatHints, ...s.records.map(encodeCircuitRecord)])
+  const body = Buffer.concat([
+    s.formatHints,
+    ...s.records.map(encodeCircuitRecord)
+  ])
   const sectionPayloadSize = 3 + body.length
   const header = Buffer.alloc(7)
   header.writeUInt32LE(sectionPayloadSize, 0)
@@ -613,12 +746,19 @@ function encodeCircuitIdsSection (s: CircuitIdsSection): Buffer {
   const body = Buffer.concat(
     s.records.map(r => {
       const nameBytes = Buffer.from(r.name, 'utf8')
-      if (r.flags.length !== 11) throw new Error('circuit_id flags must be 11 bytes')
+      if (r.flags.length !== 11)
+        throw new Error('circuit_id flags must be 11 bytes')
       const head = Buffer.alloc(2)
       head.writeUInt16LE(r.channelAddress, 0)
       const cid = Buffer.alloc(4)
       cid.writeUInt32LE(r.circuitId, 0)
-      return Buffer.concat([head, r.flags, cid, Buffer.from([nameBytes.length]), nameBytes])
+      return Buffer.concat([
+        head,
+        r.flags,
+        cid,
+        Buffer.from([nameBytes.length]),
+        nameBytes
+      ])
     })
   )
   const sectionPayloadSize = 3 + body.length
@@ -649,7 +789,8 @@ export function encodeZcf (parsed: ParsedZcf): Buffer {
   bodyParts.push(encodeGlobalConfigBlock(body.globalConfig))
   bodyParts.push(encodeCircuitsSection(body.circuits))
   bodyParts.push(encodeCircuitIdsSection(body.circuitIds))
-  for (const ts of body.trailingSections) bodyParts.push(encodeTrailingSection(ts))
+  for (const ts of body.trailingSections)
+    bodyParts.push(encodeTrailingSection(ts))
   const bodyBytes = Buffer.concat(bodyParts)
 
   // File layout (matches Python encoder):
@@ -682,10 +823,10 @@ export function encodeZcf (parsed: ParsedZcf): Buffer {
 // --------------------------------- generator ------------------------------
 
 export interface ZcfGenSpec {
-  configName: string                    // user-visible config label
+  configName: string // user-visible config label
   module: {
-    dipswitch: number                   // 0..255
-    name: string                        // module label as shown in CZone tool
+    dipswitch: number // 0..255
+    name: string // module label as shown in CZone tool
     /**
      * Module-type code (the modules-section record's
      * `module_specific_value` byte). Selects how the Configuration
@@ -711,7 +852,7 @@ export interface ZcfGenSpec {
   bankInstance?: number
   circuits: Array<{
     name: string
-    circuitId: number                   // user-set id (matches plugin's czoneFirstCircuitId+offset)
+    circuitId: number // user-set id (matches plugin's czoneFirstCircuitId+offset)
     /**
      * Sub-category bitmap encoded into the circuits-section record's
      * `flags_b` field (uint16 LE). Each bit drives one of the
@@ -733,27 +874,26 @@ export interface ZcfGenSpec {
  * generator pads its circuit list up to the expected output count
  * with non-empty placeholder circuits.
  *
- * Values verified against the Configuration Tool's GetChannelString()
- * switch in frmZoneSystemConfigurationTool.cs and cross-checked
- * against czone.navico.com product specs:
- *   m1=0x09 ( 9) = Contact 6 / Contact 6 Plus family. 6 dry-contact
- *                  outputs labelled C1..C6 (80-911-0140-00 / -0160-00).
- *   m1=0x0f (15) = Output Interface. 6 outputs DC1..DC6
- *                  (80-911-0009-00 / -0010-00).
- *   m1=0x10 (16) = Display Interface / MFD / Chartplotter. No outputs.
- *   m1=0x1c (28) = Combination Output Interface (modern). 16 outputs
- *                  (4 x 25A high-current DC1..DC4 + 12 x 10A dimmable
- *                  DC5..DC16, 150A max). 80-911-0119-00.
- *   m1=0x1d (29) = Keypad / Switch input module. 32 inputs.
- *   m1=0x1f (31) = COI variant (also 16 outputs, same DC1..DC16 layout).
- *   m1=0x36 (54) = CXP module. 13 outputs (per Compass Rose corpus).
+ * Values verified by importing generated files in the CZone
+ * Configuration Tool and reading the Modules tree label:
+ *   m1=0x0f (15) = "Output Interface". 6 outputs DC1..DC6.
+ *                  Parts 80-911-0009-00 / -0010-00.
+ *   m1=0x10 (16) = "Display Interface" / MFD / Chartplotter. No outputs.
+ *   m1=0x1c (28) = "Control 1". 16 outputs DC1..DC16.
+ *                  Part 80-911-0122-00.
+ *   m1=0x1f (31) = "Combination Output Interface". 16 outputs DC1..DC16
+ *                  (modern hardware has 4 x 25A high-current DC1..DC4 +
+ *                  12 x 10A dimmable DC5..DC16, 150A max). Parts
+ *                  80-911-0119-00 (modern) / 80-911-0120-00 (legacy).
+ *
+ * Additional codes documented in czone-spec/spec/zcf-section-modules.md
+ * but not yet empirically verified by Windows import (0x09 / 0x36 / etc.)
+ * are deliberately kept out of this runtime map.
  */
 const MODULE_TYPE_OUTPUT_COUNT: { [key: number]: number } = {
-  0x09: 6,    // COI / C6
-  0x0f: 6,    // Output Interface (DC1..DC6)
-  0x1c: 16,   // DC + Input
-  0x1f: 16,   // DC + Input
-  0x36: 13    // CXP
+  0x0f: 6, // Output Interface (DC1..DC6)
+  0x1c: 16, // Control 1 (DC1..DC16)
+  0x1f: 16 // Combination Output Interface (DC1..DC16)
 }
 
 /**
@@ -821,8 +961,23 @@ function rewriteLabelledEntities (
   if (nameBytes.length > 255) {
     throw new Error('module name too long for labelled_entities (>255 bytes)')
   }
+  if (nameBytes.length === 0) {
+    // czone-spec/spec/zcf-parser.md "Pathological-input hangs": an empty
+    // labelled-entity name traps libCZoneCore.so's post-parse duplicate-
+    // detection pass in an infinite loop. The plotter freezes — only a
+    // watchdog or hard reset clears it. Refuse to emit such a file.
+    throw new Error(
+      'labelled_entities name must be at least 1 byte; an empty name hangs the plotter'
+    )
+  }
   const newRecord = Buffer.concat([
-    Buffer.from([dipswitch & 0xff, fieldA, bankInstance & 0xff, fieldC, nameBytes.length]),
+    Buffer.from([
+      dipswitch & 0xff,
+      fieldA,
+      bankInstance & 0xff,
+      fieldC,
+      nameBytes.length
+    ]),
     nameBytes
   ])
   const newPayload = Buffer.concat([newRecord, tail])
@@ -897,7 +1052,8 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
       ...moduleProto,
       dipswitch: userDipswitch,
       name: spec.module.name,
-      moduleSpecificValue: spec.module.typeCode ?? moduleProto.moduleSpecificValue
+      moduleSpecificValue:
+        spec.module.typeCode ?? moduleProto.moduleSpecificValue
     },
     ...remainingModules
   ]
@@ -909,7 +1065,8 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   // "Spare DC2"/"Spare DC3", and no sub-category. Users who want fewer
   // visible outputs should switch to a smaller module type, but we
   // don't know enough types yet to expose that choice.
-  const effectiveTypeCode = spec.module.typeCode ?? moduleProto.moduleSpecificValue
+  const effectiveTypeCode =
+    spec.module.typeCode ?? moduleProto.moduleSpecificValue
   const expectedOutputs = MODULE_TYPE_OUTPUT_COUNT[effectiveTypeCode]
   let circuitsForGen = spec.circuits
   if (expectedOutputs !== undefined && spec.circuits.length < expectedOutputs) {
@@ -971,8 +1128,9 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   // Compass Rose's Autopilot etc. likewise carries `chan=0x0000`.
   // Without this leading entry the side-bar control on Navico displays
   // doesn't bind (mister nui's note via Scott).
-  const wildcardFlagsBytes = circuitProto.outputs.find(o => o.channelAddress === 0)?.flagsBytes
-    ?? Buffer.from('0101010000', 'hex')
+  const wildcardFlagsBytes =
+    circuitProto.outputs.find(o => o.channelAddress === 0)?.flagsBytes ??
+    Buffer.from('0101010000', 'hex')
 
   parsed.body.circuits.records = circuitsForGen.map((c, i) => ({
     circuitIndex: indexBase + i,
@@ -981,7 +1139,10 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
     // subCategory, that overrides the template's flags_b. The Configuration
     // Tool reads this to drive its "Circuit Menu Sub-Categories"
     // checkboxes.
-    flagsB: typeof c.subCategory === 'number' ? (c.subCategory & 0xffff) : circuitProto.flagsB,
+    flagsB:
+      typeof c.subCategory === 'number'
+        ? c.subCategory & 0xffff
+        : circuitProto.flagsB,
     field2a: circuitProto.field2a,
     name: c.name,
     outputs: [
@@ -993,8 +1154,10 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
       },
       {
         channelAddress: (outBaseChan + i) & 0xffff,
-        flagsBytes: Buffer.from(circuitProto.outputs[circuitProto.outputs.length - 1].flagsBytes),
-        name: ''  // outputs in the template are unnamed; circuit name is the user-visible one
+        flagsBytes: Buffer.from(
+          circuitProto.outputs[circuitProto.outputs.length - 1].flagsBytes
+        ),
+        name: '' // outputs in the template are unnamed; circuit name is the user-visible one
       }
     ],
     displayRefs: [

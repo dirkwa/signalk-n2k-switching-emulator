@@ -86,17 +86,21 @@ const SUB_CATEGORY_NAME_TO_BIT: { [key: string]: number } = {
 }
 
 const CZONE_HEARTBEAT_MS = 2000
-// Re-broadcast PGN 65290 every 10 s so a plotter that joins the bus after
-// the plugin starts still sees the module's announce. spec/pgn-65290.md
-// doesn't mandate a cadence — this is defensive correctness.
-const CZONE_ANNOUNCE_MS = 10000
+// Re-broadcast PGN 65290 every 2 s, matching the heartbeat cadence. The
+// plotter's transmit-side state machine clears its per-chunk acknowledged-
+// receiver bitmap each chunk window (~3 s, per czone-spec/spec/zcf-transmit-
+// protocol.md), and one of PGN 65290 / 65284 is what sets the bit again. By
+// keeping the announce inside the chunk window the plugin is robust against
+// either PGN being the actual gate without disassembling it further.
+const CZONE_ANNOUNCE_MS = 2000
 const CZONE_PGN_ZCF_TRANSFER = 130816
 // SignalK PUT path that triggers a .zcf push when czoneZcfPushEnabled is true.
 // The PUT value carries the .zcf as a base64 string.
 const CZONE_ZCF_PUSH_PATH = 'electrical.czone.pushZcf'
 
 export default function (app: any) {
-  const error = app.error?.bind(app) ?? ((...args: any[]) => console.error(...args))
+  const error =
+    app.error?.bind(app) ?? ((...args: any[]) => console.error(...args))
   const debug = app.debug?.bind(app) ?? ((..._args: any[]) => {})
   let props: any
   let onStop: any = []
@@ -503,7 +507,9 @@ export default function (app: any) {
       // or upload it to a Navico MFD via SD/USB.
       router.get('/zcf', (req: any, res: any) => {
         const bankIndex =
-          req.query?.bank !== undefined ? parseInt(String(req.query.bank), 10) : 0
+          req.query?.bank !== undefined
+            ? parseInt(String(req.query.bank), 10)
+            : 0
         if (!Number.isFinite(bankIndex) || bankIndex < 0) {
           return res.status(400).send('bank must be a non-negative integer')
         }
@@ -513,12 +519,16 @@ export default function (app: any) {
         }
         try {
           const zcf = generateZcfForBank(bank)
-          const filename = `${(bank.czoneModuleName || `signalk-bank-${bank.instance}`)
-            .replace(/[^a-zA-Z0-9._-]/g, '_')}.zcf`
+          const filename = `${(
+            bank.czoneModuleName || `signalk-bank-${bank.instance}`
+          ).replace(/[^a-zA-Z0-9._-]/g, '_')}.zcf`
           res.setHeader('Content-Type', 'application/octet-stream')
-          res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+          res.setHeader(
+            'Content-Disposition',
+            `attachment; filename="${filename}"`
+          )
           res.send(zcf)
-        } catch (e: any) {
+        } catch (e) {
           error(e)
           res.status(500).send(`zcf generation failed: ${e?.message ?? e}`)
         }
@@ -556,7 +566,7 @@ export default function (app: any) {
             title: 'Enable .zcf push to the CZone bus (experimental)',
             description:
               'When enabled, the plugin can push a .zcf file to the bus via PGN 130816 ' +
-              'fast-packet sequences from the first CZone-enabled bank\'s source address. ' +
+              "fast-packet sequences from the first CZone-enabled bank's source address. " +
               'Trigger with a SignalK PUT to electrical.czone.pushZcf carrying ' +
               '{ "value": "<base64 of .zcf>" } in the request body. ' +
               'Real CZone modules and plotters listening on PGN 130816 will receive the ' +
@@ -632,8 +642,8 @@ export default function (app: any) {
                   type: 'string',
                   title: 'CZone module type',
                   description:
-                    'Which kind of module the CZone Configuration Tool should render this bank as. Pick the one matching your real hardware (look at the part-number sticker on your module). "oi" = Output Interface, 80-911-0009-00 / -0010-00, 6 outputs DC1..DC6 (the default). "coi" = Combination Output Interface, 80-911-0119-00, 16 outputs (4 x 25A DC1..DC4 + 12 x 10A dimmable DC5..DC16). "contact6" = Contact 6 / Contact 6 Plus, 80-911-0140-00 / -0160-00, 6 dry-contact outputs C1..C6. "cxp" = larger CXP load module, 13 outputs.',
-                  enum: ['oi', 'coi', 'contact6', 'cxp'],
+                    'Which kind of module the CZone Configuration Tool should render this bank as. Look at the part-number sticker on your module to pick the matching type. "oi" = Output Interface (default), 6 outputs DC1..DC6, parts 80-911-0009-00 / -0010-00. "coi" = Combination Output Interface, 16 outputs DC1..DC16 (the modern hardware has 4 x 25A high-current + 12 x 10A dimmable, 150A max), parts 80-911-0119-00 (modern) / 80-911-0120-00 (legacy). "control1" = Control 1 module, 16 outputs DC1..DC16, part 80-911-0122-00 (a separate Mastervolt product that shares the 16-channel layout with COI but has its own hardware identity).',
+                  enum: ['oi', 'coi', 'control1'],
                   default: 'oi'
                 },
                 czoneSubCategories: {
@@ -1002,26 +1012,24 @@ export default function (app: any) {
     const moduleName = bank.czoneModuleName || `SignalK Bank ${bank.instance}`
     const subCats = (bank.czoneSubCategories as string[]) ?? []
     // typeCode picks how the Configuration Tool labels the module's
-    // outputs:
-    //   'oi'      -> m1=0x0f, the standard Output Interface
-    //                (80-911-0009-00 / -0010-00, 6 outputs DC1..DC6)
-    //   'coi'     -> m1=0x1c, the modern Combination Output Interface
-    //                (80-911-0119-00, 16 outputs: 4 high-current
-    //                DC1..DC4 + 12 dimmable DC5..DC16, 150A max)
-    //   'contact6'-> m1=0x09, the Contact 6 / Contact 6 Plus family
-    //                (80-911-0140-00 / -0160-00, 6 dry-contact
-    //                outputs C1..C6)
-    //   'cxp'     -> m1=0x36, a CXP load module variant (13 outputs;
-    //                seen in Compass Rose corpus as 'Engine Room CXP'
-    //                and 'Helm CXP')
-    // Verified against czone.navico.com product specs and the
-    // Configuration Tool's GetChannelString switch.
+    // outputs. Each value is verified by importing a generated file
+    // on Windows and reading the tool's Modules tree label:
+    //   'oi'       -> m1=0x0f. Renders as "Output Interface", 6 outputs
+    //                 DC1..DC6. Parts 80-911-0009-00 / -0010-00.
+    //   'coi'      -> m1=0x1f. Renders as "Combination Output Interface",
+    //                 16 outputs DC1..DC16 (4 high-current + 12 dimmable
+    //                 on the modern hardware, 150A max). Parts
+    //                 80-911-0119-00 (modern) / 80-911-0120-00 (legacy).
+    //   'control1' -> m1=0x1c. Renders as "Control 1", 16 outputs
+    //                 DC1..DC16. A separate Mastervolt product
+    //                 (80-911-0122-00) that happens to share the
+    //                 16-channel layout with COI but has its own
+    //                 hardware identity.
+    // Other czoneModuleType values ('contact6', 'cxp') are intentionally
+    // absent until we can verify them empirically by Windows import.
     const typeKey = (bank.czoneModuleType as string) || 'oi'
     const typeCode =
-      typeKey === 'coi' ? 0x1c :
-      typeKey === 'contact6' ? 0x09 :
-      typeKey === 'cxp' ? 0x36 :
-      0x0f
+      typeKey === 'coi' ? 0x1f : typeKey === 'control1' ? 0x1c : 0x0f
     const spec: ZcfGenSpec = {
       configName: bank.czoneConfigName || `SignalK Switching ${bank.instance}`,
       module: { dipswitch, name: moduleName, typeCode },
@@ -1120,7 +1128,7 @@ export default function (app: any) {
             statusCode: 200,
             message: `pushed ${zcf.length} bytes as ${chunks} chunks`
           }
-        } catch (e: any) {
+        } catch (e) {
           error(e)
           return {
             state: 'COMPLETED',
@@ -1156,10 +1164,12 @@ export default function (app: any) {
       // canboatjsUtils arrives below, the bank's DeviceEmulator is
       // attached and the next periodic announce uses the MFG=295 path.
       sendBankAnnounce(bank)
-      // Defensive: re-broadcast PGN 65290 every 10 s so a plotter that
-      // joins the bus after the plugin starts still sees the announce.
-      // spec/pgn-65290.md doesn't mandate a cadence; real CZone modules
-      // tolerate periodic re-announce and the bus chatter is negligible.
+      // Re-broadcast PGN 65290 every 2 s. spec/pgn-65290.md doesn't mandate
+      // a cadence, but spec/zcf-transmit-protocol.md shows the plotter's
+      // state-9 handler clears its acknowledged-receiver bitmap each chunk
+      // window (~3 s) — the announce has to land inside that window for
+      // the plotter to advance past chunk 0. Real CZone modules tolerate
+      // a 2 s announce cadence; the bus chatter is negligible.
       const announceInterval = setInterval(
         () => sendBankAnnounce(bank),
         CZONE_ANNOUNCE_MS

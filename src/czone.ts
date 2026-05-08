@@ -127,20 +127,28 @@ export function packZcfChunk (chunkIdx: number, data: Buffer): Buffer {
  * Returns a list of `{ chunkIdx, payload }` objects ready to be wrapped
  * by `czoneFrame(130816, payload)` and emitted onto the bus.
  */
-export function chunkZcf (zcf: Buffer): Array<{ chunkIdx: number; payload: Buffer }> {
+export function chunkZcf (
+  zcf: Buffer
+): Array<{ chunkIdx: number; payload: Buffer }> {
   const chunks: Array<{ chunkIdx: number; payload: Buffer }> = []
   let offset = 0
   let chunkIdx = 0
   while (offset + CZONE_ZCF_CHUNK_DATA_MAX <= zcf.length) {
     chunks.push({
       chunkIdx,
-      payload: packZcfChunk(chunkIdx, zcf.slice(offset, offset + CZONE_ZCF_CHUNK_DATA_MAX))
+      payload: packZcfChunk(
+        chunkIdx,
+        zcf.slice(offset, offset + CZONE_ZCF_CHUNK_DATA_MAX)
+      )
     })
     offset += CZONE_ZCF_CHUNK_DATA_MAX
     chunkIdx += 1
   }
   if (offset < zcf.length) {
-    chunks.push({ chunkIdx, payload: packZcfChunk(chunkIdx, zcf.slice(offset)) })
+    chunks.push({
+      chunkIdx,
+      payload: packZcfChunk(chunkIdx, zcf.slice(offset))
+    })
     chunkIdx += 1
   }
   // Explicit zero-byte terminator chunk.
