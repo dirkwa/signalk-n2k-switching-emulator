@@ -365,4 +365,29 @@ if (coiParsed.body.circuits.records.length !== 16) {
 }
 console.log(`generator: typeCode override 0x1f (COI, 16 outputs) pads to 16 circuits: OK`)
 
+// Run czone-spec/tools/zcf_validate.py against a generated .zcf if it's
+// available on this machine. The validator implements every checkable rule
+// in czone-spec/spec/zcf-validation.md (H1-H7 header, F1-F7 framing, D1-D8
+// dipswitch consistency, O1-O2 output counts, T1 labelled-entity hang
+// guard). Exit code 0 = no FAILs. Skipped (with a note) when czone-spec
+// isn't checked out as a sibling of this repo.
+const validatorPath = path.resolve(here, '..', '..', 'czone-spec', 'tools', 'zcf_validate.py')
+if (fs.existsSync(validatorPath)) {
+  const tmpZcf = path.join(here, '.tmp-validator-input.zcf')
+  fs.writeFileSync(tmpZcf, coiGen)
+  try {
+    const { spawnSync } = await import('node:child_process')
+    const r = spawnSync('python3', [validatorPath, tmpZcf, '--quiet'], { encoding: 'utf8' })
+    if (r.status === null) throw new Error(`could not invoke python3: ${r.error?.message ?? r.error}`)
+    if (r.status !== 0) {
+      throw new Error(`zcf_validate.py reported FAIL on a freshly-generated .zcf:\n${r.stdout}\n${r.stderr}`)
+    }
+    console.log(`generator: czone-spec validator (zcf_validate.py) reports 0 FAIL on generated .zcf: OK`)
+  } finally {
+    try { fs.unlinkSync(tmpZcf) } catch (_) {}
+  }
+} else {
+  console.log(`generator: skipped czone-spec validator check (${validatorPath} not present)`)
+}
+
 console.log('\nzcf-encoder test: PASS')
