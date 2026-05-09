@@ -94,6 +94,11 @@ const CZONE_HEARTBEAT_MS = 2000
 // either PGN being the actual gate without disassembling it further.
 const CZONE_ANNOUNCE_MS = 2000
 const CZONE_PGN_ZCF_TRANSFER = 130816
+// Delay between attaching the device emulator and auto-pushing the .zcf.
+// Gives the plotter time to discover the plugin (PGN 65290 + heartbeat)
+// before the chunks arrive. 10 s is generous; a real plotter completes
+// CZone discovery in ~3-5 s once announces start flowing.
+const CZONE_AUTO_PUSH_DELAY_MS = 10000
 // SignalK PUT path that triggers a .zcf push when czoneZcfPushEnabled is true.
 // The PUT value carries the .zcf as a base64 string.
 const CZONE_ZCF_PUSH_PATH = 'electrical.czone.pushZcf'
@@ -571,8 +576,25 @@ export default function (app: any) {
               'Trigger with a SignalK PUT to electrical.czone.pushZcf carrying ' +
               '{ "value": "<base64 of .zcf>" } in the request body. ' +
               'Real CZone modules and plotters listening on PGN 130816 will receive the ' +
-              'broadcast; whether a real plotter accepts a non-plotter-originated .zcf as ' +
-              'a config replacement is not yet pinned down by czone-spec. Default off.',
+              'broadcast, CRC-validate, persist to default.zcf on disk, and reload. ' +
+              'Default off.',
+            default: false
+          },
+          czoneAutoPushZcfOnStart: {
+            type: 'boolean',
+            title:
+              'Auto-push the bank-0 .zcf to the bus shortly after start (recovery path)',
+            description:
+              "When enabled, the plugin generates the first CZone-enabled bank's .zcf " +
+              'and broadcasts it via PGN 130816 ~10 seconds after the device emulator ' +
+              "attaches, exercising the plotter's bus-receive path " +
+              '(czone-spec/spec/zcf-parser.md "Architecture summary"). The plotter ' +
+              'CRC-validates the chunks, writes the result to its own default.zcf on ' +
+              'disk, and reloads — recovering from a "Starting configuration claim" ' +
+              'cold-start hang caused by a missing or corrupt default.zcf. Requires ' +
+              'czoneZcfPushEnabled also be true. Use for diagnostic / recovery only; ' +
+              "default off so the plugin doesn't unilaterally rewrite a working " +
+              "plotter's config on every restart.",
             default: false
           },
           czoneMfdDipswitch: {
@@ -924,6 +946,51 @@ export default function (app: any) {
     })
     emulator.onPGN((pgn: any) => onCZonePGN(bank, pgn))
     sendBankAnnounce(bank)
+    maybeScheduleAutoPushZcf(bank)
+  }
+
+  // If czoneAutoPushZcfOnStart is enabled (and czoneZcfPushEnabled is true,
+  // since auto-push uses the same code path), schedule a one-shot timer to
+  // push this bank's .zcf via PGN 130816 about 10 s after the emulator
+  // attaches. The plotter CRC-validates inbound chunks and persists the
+  // result to its own default.zcf — recovering from a "Starting
+  // configuration claim" cold-start hang caused by a missing or corrupt
+  // default.zcf on the plotter's disk. See czone-spec/spec/zcf-parser.md
+  // "Architecture summary" — the bus-receive path triggers a write-then-
+  // reload regardless of whether the on-disk default.zcf is currently
+  // valid. Only fires for the FIRST CZone-enabled bank (matching the
+  // PUT-handler contract that pushes from the first bank's SA); other
+  // banks' .zcfs would have to be pushed manually via the PUT endpoint.
+  function maybeScheduleAutoPushZcf (bank: any): void {
+    if (!props?.czoneAutoPushZcfOnStart) return
+    if (!props?.czoneZcfPushEnabled) {
+      debug(
+        'czoneAutoPushZcfOnStart=true but czoneZcfPushEnabled=false; ' +
+          'auto-push disabled (set both to true to enable)'
+      )
+      return
+    }
+    const firstEnabled = czoneEnabledBanks()[0]
+    if (!firstEnabled || firstEnabled.instance !== bank.instance) return
+    const timer = setTimeout(() => {
+      try {
+        const zcf = generateZcfForBank(bank)
+        const { chunks } = pushZcfToBus(zcf)
+        debug(
+          'auto-pushed bank %d .zcf (%d bytes) as %d PGN 130816 chunks',
+          bank.instance,
+          zcf.length,
+          chunks
+        )
+      } catch (e) {
+        error(
+          `auto-push of bank ${bank.instance} .zcf failed: ${
+            e instanceof Error ? e.message : String(e)
+          }`
+        )
+      }
+    }, CZONE_AUTO_PUSH_DELAY_MS)
+    onStop.push(() => clearTimeout(timer))
   }
 
   // Dispatch a CZone proprietary PGN that arrived on a specific bank's
