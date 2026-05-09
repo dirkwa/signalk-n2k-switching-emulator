@@ -365,6 +365,46 @@ if (coiParsed.body.circuits.records.length !== 16) {
 }
 console.log(`generator: typeCode override 0x1f (COI, 16 outputs) pads to 16 circuits: OK`)
 
+// mfdDipswitch: when supplied, the Display Interface module's dipswitch
+// in the generated .zcf should match the supplied value verbatim (instead
+// of the legacy "lowest unused" fallback that picked dipswitch 1 for
+// Scott's COI test, causing SV MOIN's plotter to hang in state 0
+// "Starting configuration claim" because the real plotter's dipswitch
+// wasn't 1). Spec ref: czone-spec/spec/czone-config-state-machine.md.
+const mfdSpec = {
+  configName: 'MFD Dipswitch Test',
+  module: { dipswitch: 0x05, name: 'Test Module' },
+  bankInstance: 0,
+  mfdDipswitch: 0x42,
+  circuits: [{ name: 'Switch 1', circuitId: 13 }]
+}
+const mfdGen = generateZcf(mfdSpec, template)
+const mfdParsed = parseZcfFull(mfdGen)
+const displayModule = mfdParsed.body.modules.records.find(m => m.moduleSpecificValue === 0x10)
+if (!displayModule) {
+  throw new Error('mfdDipswitch test: no Display Interface module in generated file')
+}
+if (displayModule.dipswitch !== 0x42) {
+  throw new Error(`mfdDipswitch test: Display Interface dipswitch = ${displayModule.dipswitch}, want 0x42`)
+}
+console.log(`generator: mfdDipswitch=0x42 pinned the Display Interface module dipswitch: OK`)
+
+// mfdDipswitch must differ from module.dipswitch.
+let mfdConflictRejected = false
+try {
+  generateZcf({ ...mfdSpec, mfdDipswitch: 0x05 }, template)
+} catch (err) {
+  if (/mfdDipswitch.*must differ from module\.dipswitch/i.test(err.message)) {
+    mfdConflictRejected = true
+  } else {
+    throw err
+  }
+}
+if (!mfdConflictRejected) {
+  throw new Error('mfdDipswitch test: passing mfdDipswitch == module.dipswitch should have thrown')
+}
+console.log(`generator: mfdDipswitch == module.dipswitch is refused: OK`)
+
 // Run czone-spec/tools/zcf_validate.py against a generated .zcf if it's
 // available on this machine. The validator implements every checkable rule
 // in czone-spec/spec/zcf-validation.md (H1-H7 header, F1-F7 framing, D1-D8

@@ -850,6 +850,20 @@ export interface ZcfGenSpec {
    * separately based on the bank's `instance` setting.)
    */
   bankInstance?: number
+  /**
+   * Dipswitch the generated .zcf assigns to the Display Interface
+   * (m1=0x10) module record — i.e. the dipswitch the plotter expects
+   * to recognise as "itself" when it loads this .zcf. Must match the
+   * real MFD's CZone-side dipswitch (look it up in the plotter's CZone
+   * settings page) AND must differ from `module.dipswitch`.
+   *
+   * If omitted, the generator picks the lowest dipswitch not equal to
+   * `module.dipswitch` — which works only by coincidence; the plotter
+   * stays stuck in state 0 ("Starting configuration claim") whenever
+   * the picked value doesn't match the real MFD's dipswitch. See
+   * czone-spec/spec/czone-config-state-machine.md state-0 transition.
+   */
+  mfdDipswitch?: number
   circuits: Array<{
     name: string
     circuitId: number // user-set id (matches plugin's czoneFirstCircuitId+offset)
@@ -895,6 +909,13 @@ const MODULE_TYPE_OUTPUT_COUNT: { [key: number]: number } = {
   0x1c: 16, // Control 1 (DC1..DC16)
   0x1f: 16 // Combination Output Interface (DC1..DC16)
 }
+
+// Module-type code for "Display Interface" — the MFD/chartplotter itself.
+// The .zcf must declare exactly one such module (D6 in czone-spec/spec/
+// zcf-validation.md), and its dipswitch must match the real plotter's
+// CZone-side dipswitch — otherwise the plotter stays stuck in state 0
+// ("Starting configuration claim") at cold-start.
+const DISPLAY_INTERFACE_M1 = 0x10
 
 /**
  * Sub-category bit positions for `ZcfGenSpec.circuits[].subCategory`.
@@ -1032,13 +1053,31 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   // Control row is missing).
   const moduleProto = parsed.body.modules.records[0]
   const userDipswitch = spec.module.dipswitch & 0xff
-  // If a remaining module shares the user's dipswitch, move it to an
-  // unused dipswitch (the MFD/Display Interface is what we typically
-  // hit here; collisions otherwise produce two modules at the same
-  // dipswitch which the tool refuses to render correctly).
+  const mfdDipswitch =
+    spec.mfdDipswitch !== undefined ? spec.mfdDipswitch & 0xff : undefined
+  if (mfdDipswitch !== undefined && mfdDipswitch === userDipswitch) {
+    throw new Error(
+      `mfdDipswitch (${mfdDipswitch}) must differ from module.dipswitch (${userDipswitch})`
+    )
+  }
+  // For each non-first template module: if it's the Display Interface
+  // (m1=0x10) and the caller supplied an mfdDipswitch, use that exact
+  // value (so the plotter recognises itself in the .zcf and can claim
+  // authority during state-0 cold-start — see czone-spec/spec/czone-
+  // config-state-machine.md). Otherwise, if the template's dipswitch
+  // collides with the user's bank dipswitch, fall back to picking the
+  // lowest unused value (legacy behaviour, works only by coincidence;
+  // the Display Interface case is the one that matters in practice).
   const usedDipswitches = new Set<number>([userDipswitch])
+  if (mfdDipswitch !== undefined) usedDipswitches.add(mfdDipswitch)
   const remainingModules = parsed.body.modules.records.slice(1).map(m => {
-    if (m.dipswitch === userDipswitch) {
+    if (
+      mfdDipswitch !== undefined &&
+      m.moduleSpecificValue === DISPLAY_INTERFACE_M1
+    ) {
+      return { ...m, dipswitch: mfdDipswitch }
+    }
+    if (m.dipswitch === userDipswitch || usedDipswitches.has(m.dipswitch)) {
       let alt = 1
       while (usedDipswitches.has(alt) && alt < 0xff) alt++
       usedDipswitches.add(alt)

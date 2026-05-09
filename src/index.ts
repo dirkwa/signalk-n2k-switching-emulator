@@ -575,6 +575,20 @@ export default function (app: any) {
               'a config replacement is not yet pinned down by czone-spec. Default off.',
             default: false
           },
+          czoneMfdDipswitch: {
+            type: 'string',
+            title: 'MFD CZone dipswitch (8-bit binary string)',
+            description:
+              "Your MFD's (Zeus / NSS / Vulcan / etc.) own CZone dipswitch — find it in " +
+              "the MFD's CZone settings page. The generated .zcf declares a Display " +
+              'Interface module at this dipswitch so the plotter recognises itself in the ' +
+              'config and can claim authority during the cold-start "Starting configuration ' +
+              'claim" state. Mismatch with the real MFD\'s dipswitch causes the plotter to ' +
+              'hang in that state. 8-character binary string, e.g. "00000001" = 1. Must ' +
+              "differ from every bank's czoneDipswitch.",
+            default: '00000001',
+            pattern: '^[01]{8}$'
+          },
           banks: {
             title: 'Banks',
             type: 'array',
@@ -1031,10 +1045,16 @@ export default function (app: any) {
     const typeKey = (bank.czoneModuleType as string) || 'oi'
     const typeCode =
       typeKey === 'coi' ? 0x1f : typeKey === 'control1' ? 0x1c : 0x0f
+    const mfdDipswitchRaw = props?.czoneMfdDipswitch
+    const mfdDipswitch =
+      typeof mfdDipswitchRaw === 'string' && /^[01]{8}$/.test(mfdDipswitchRaw)
+        ? parseDipswitch(mfdDipswitchRaw)
+        : undefined
     const spec: ZcfGenSpec = {
       configName: bank.czoneConfigName || `SignalK Switching ${bank.instance}`,
       module: { dipswitch, name: moduleName, typeCode },
       bankInstance: bank.instance & 0xff,
+      mfdDipswitch,
       circuits: switches.map((sw, i) => {
         const subKey = subCats[i] ?? 'none'
         const subCategory = SUB_CATEGORY_NAME_TO_BIT[subKey] ?? 0
