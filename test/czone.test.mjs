@@ -86,12 +86,22 @@ assert.equal(isCircuitStateQuery(Buffer.from([0x27, 0x99, 0xc8, 0x10])), true)
 assert.equal(isCircuitStateQuery(Buffer.from([0x27, 0x99, 0xc8, 0x11])), false)
 assert.equal(isCircuitStateQuery(Buffer.from([0x27, 0x99, 0xc7, 0x10])), false)
 
-// PGN 130817: header is added by czoneFrame; packStatusExtended returns the body
+// PGN 130817: header is added by czoneFrame; packStatusExtended returns the body.
+// Per czone-spec/spec/pgn-130817.md, byte 0 of each per-circuit record is the
+// circuit_id (NOT the on/off state). The on/off state is conveyed via PGN
+// 65284's bitmap, not via PGN 130817. circuit_id follows the canonical
+// bit-position rule from czone-spec/spec/zcf-section-circuit-ids.md "Rule 1":
+// 1<<i for i<8, else 0.
 const body = packStatusExtended(0x18, [true, false, true, false, false, false])
 assert.equal(body[0], 0x01, 'state page')
 assert.equal(body[1], 0x18, 'dipswitch')
-assert.equal(body[2], 0x01, 'switch 1 on')
-assert.equal(body[5], 0x00, 'switch 2 off')
-assert.equal(body[8], 0x01, 'switch 3 on')
+// Circuit 0 (i=0): circuit_id = 1<<0 = 1
+assert.equal(body[2], 0x01, 'circuit 0 id = 1')
+assert.equal(body[3], 0x00, 'circuit 0 value_low = 0')
+assert.equal(body[4], 0x04, 'circuit 0 value_high_and_sign = positive sign, value=0')
+// Circuit 1 (i=1): circuit_id = 1<<1 = 2
+assert.equal(body[5], 0x02, 'circuit 1 id = 2')
+// Circuit 2 (i=2): circuit_id = 1<<2 = 4
+assert.equal(body[8], 0x04, 'circuit 2 id = 4')
 
 console.log('czone packer smoke test: PASS')

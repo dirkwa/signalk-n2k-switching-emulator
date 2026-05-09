@@ -157,10 +157,37 @@ export function chunkZcf (
 }
 
 /**
- * PGN 130817 (Status Extended) payload after the 2-byte CZone header. Carries
- * a state-page identifier, the dipswitch, and one 3-byte analog record per
- * switch. The record layout is `[state, secondary, flag]`; the meaningful
- * byte is the first (1 = on, 0 = off).
+ * PGN 130817 (Status Extended) payload after the 2-byte CZone header. Per
+ * `czone-spec/spec/pgn-130817.md`:
+ *
+ *   bytes 0-1: CZone manufacturer header (added by `czoneFrame`)
+ *   byte 2:    `page` — observed `0x01` in our captures
+ *   byte 3:    `dipswitch` — reporting module's dipswitch
+ *   bytes 4..: per-circuit records, each 3 bytes:
+ *     byte 0: `circuit_id` — matches the .zcf's circuit_id LSB (so the
+ *             plotter can correlate this report back to the circuit
+ *             declared in the modules section). Per the canonical
+ *             bit-position rule (`spec/zcf-section-circuit-ids.md`
+ *             "Rule 1"), this is `1 << i` for circuit index i < 8,
+ *             else 0 (ambiguous; circuits 9-16 share circuit_id=0).
+ *     byte 1: `value_low` — low byte of a signed 10-bit value
+ *     byte 2: `value_high_and_sign` — bits 0..1 of value, bit 2 = sign
+ *             (set = positive), bit 3 = primary alarm flag (kept clear
+ *             so the plotter doesn't think we're asserting an alarm),
+ *             bits 4..7 = additional flags (left clear)
+ *
+ * For switch banks (no current measurement), value is reported as
+ * +0 (`value_low = 0`, `value_high_and_sign = 0x04` for "positive sign,
+ * value=0"). The on/off state is conveyed via PGN 65284's bitmap, not
+ * via PGN 130817.
+ *
+ * **Bug history**: a prior version of this function wrote the on/off
+ * state into `byte 0` (the circuit_id slot) of every record. That made
+ * every record claim circuit_id=0 or =1, which the plotter detected
+ * as a configuration mismatch and surfaced as `eCZoneConfigState[12]`
+ * "Configuration conflict detected on network" — the plotter would
+ * refuse to leave its initial state. Fixed 2026-05-10 to put the
+ * canonical circuit_id in byte 0.
  */
 export function packStatusExtended (
   dipswitch: number,
@@ -172,9 +199,12 @@ export function packStatusExtended (
   for (let i = 0; i < CZONE_SUPPORTED_SWITCHES; i++) {
     const offset = CZONE_ANALOG_BASE_OFFSET - 2 + i * CZONE_ANALOG_STRIDE
     if (offset + 2 < payload.length) {
-      const on = switches[i] ? 1 : 0
-      payload[offset] = on
-      payload[offset + 1] = on
+      // Canonical circuit_id per spec: 1<<i for i<8, else 0.
+      payload[offset] = i < 8 ? (1 << i) & 0xff : 0
+      // value_low = 0 (no measurement)
+      payload[offset + 1] = 0
+      // value_high_and_sign: bit 2 set = positive sign, bits 0..1 = magnitude=0,
+      // bit 3 (alarm flag) = 0, bits 4..7 = 0.
       payload[offset + 2] = CZONE_EXTENDED_POSITIVE_FLAG
     }
   }
