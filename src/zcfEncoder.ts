@@ -1149,12 +1149,15 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   // 0x01, found no module, and crashed in UpdateLvCircuitOutputs).
   const circuitProto = parsed.body.circuits.records[0]
   const cidProto = parsed.body.circuitIds.records[0]
-  const protoOutChan = circuitProto.outputs[0]?.channelAddress ?? 0x011e
   const protoDrefAddr = circuitProto.displayRefs[0]?.displayAddress ?? 0x0100
-  // Re-namespace the low byte of the template's output and display ranges
-  // under the user's chosen dipswitch.
+  // Re-namespace the low byte of the template's display-ref range under the
+  // user's chosen dipswitch. The display_refs and circuit_ids both reference
+  // module-physical channel positions and need to be in the same namespace
+  // as the module's dipswitch so the firmware's GetChannelString lookup
+  // resolves cleanly. (We no longer emit a per-circuit physical-output
+  // binding — see the wildcard-only output below — so we don't need the
+  // matching `outBaseChan` for the outputs sub-section anymore.)
   const dipHi = (spec.module.dipswitch & 0xff) << 8
-  const outBaseChan = (dipHi | (protoOutChan & 0xff)) & 0xffff
   const drefBaseAddr = (dipHi | (protoDrefAddr & 0xff)) & 0xffff
   const indexBase = circuitProto.circuitIndex
 
@@ -1184,19 +1187,24 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
         : circuitProto.flagsB,
     field2a: circuitProto.field2a,
     name: c.name,
+    // Wildcard "All Display Interfaces" entry only — no second
+    // physical-output binding. Verified 2026-05-10 against Scott's
+    // working Gannet-nosb_Scott_works.zcf, which has exactly one
+    // output (the wildcard) per circuit. An earlier generator path
+    // emitted a second output bound to (dipswitch<<8 | template_chan+i),
+    // intended to provide a real physical-output binding alongside
+    // the wildcard. That path produced channel addresses outside the
+    // module's actual output range (e.g. channel 30..45 for a COI
+    // module that only has DC1..DC16) — MFDApp appears to reject
+    // such .zcf files silently, leaving the plotter stuck on
+    // "Starting configuration claim" (eCZoneConfigState = 0). Falling
+    // back to wildcard-only output matches Gannet and resolves the
+    // hang on Scott's Zeus3S.
     outputs: [
       {
-        // Wildcard "All Display Interfaces" entry.
         channelAddress: 0x0000,
         flagsBytes: Buffer.from(wildcardFlagsBytes),
         name: ''
-      },
-      {
-        channelAddress: (outBaseChan + i) & 0xffff,
-        flagsBytes: Buffer.from(
-          circuitProto.outputs[circuitProto.outputs.length - 1].flagsBytes
-        ),
-        name: '' // outputs in the template are unnamed; circuit name is the user-visible one
       }
     ],
     displayRefs: [

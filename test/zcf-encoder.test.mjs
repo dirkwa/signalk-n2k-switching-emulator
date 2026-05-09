@@ -313,11 +313,18 @@ if (!hasDisplayInterface) {
   throw new Error(`sidebar config: no Display Interface module (m1=0x10) in generated file -- "All Display Interfaces" Circuit Control will be missing`)
 }
 for (const ckt of sidebarParsed.body.circuits.records) {
-  if (ckt.outputs.length < 2 || ckt.outputs[0].channelAddress !== 0) {
-    throw new Error(`circuit ${ckt.name} missing leading outputs[0] chan=0x0000 wildcard (got outputs=${ckt.outputs.map(o => '0x' + o.channelAddress.toString(16)).join(',')})`)
+  // Wildcard-only outputs per circuit. Verified 2026-05-10 against
+  // Scott's working Gannet-nosb_Scott_works.zcf, which has exactly one
+  // output (chan=0x0000) per circuit. The earlier two-output pattern
+  // (wildcard + a synthetic physical-output binding) produced channel
+  // addresses outside the module's actual output range and caused
+  // MFDApp to silently reject the .zcf, leaving the plotter stuck on
+  // "Starting configuration claim". See src/zcfEncoder.ts comments.
+  if (ckt.outputs.length !== 1 || ckt.outputs[0].channelAddress !== 0) {
+    throw new Error(`circuit ${ckt.name} expected exactly one wildcard output chan=0x0000 (got outputs=${ckt.outputs.map(o => '0x' + o.channelAddress.toString(16)).join(',')})`)
   }
 }
-console.log(`generator: every circuit has leading wildcard output + Display Interface module preserved: OK`)
+console.log(`generator: every circuit has wildcard-only output + Display Interface module preserved: OK`)
 
 // Module type override: spec.module.typeCode rewrites the module's
 // module_specific_value byte. Three of the four currently-known type
