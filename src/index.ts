@@ -42,7 +42,6 @@ import {
   CZONE_PGN_LABEL_QUERY,
   CZONE_PGN_LABEL_REPLY,
   CZONE_PGN_STATUS_EXTENDED,
-  CZONE_SUPPORTED_SWITCHES,
   czoneFrame,
   deriveUniqueSerial,
   isCircuitStateQuery,
@@ -804,18 +803,27 @@ export default function (app: any) {
   }
 
   function readBankSwitchStates (bank: any): boolean[] {
-    const out = new Array(CZONE_SUPPORTED_SWITCHES).fill(false)
-    bank.switches?.forEach((sw: any, index: number) => {
-      if (index >= CZONE_SUPPORTED_SWITCHES) return
+    // Size the result array to the bank's actual configured switch count
+    // (capped at 32, the bitmap width in PGN 65284). Hardcoding to
+    // CZONE_SUPPORTED_SWITCHES=6 was wrong for non-OI module types: a
+    // 16-channel COI bank would still report only 6 switches, causing
+    // the plotter to detect a circuit-count mismatch vs the loaded
+    // .zcf and surface state 12 ("Configuration conflict detected on
+    // network").
+    const switchPaths = (bank.switches as string[]) ?? []
+    const count = Math.min(switchPaths.length, 32)
+    const out = new Array(count).fill(false)
+    for (let index = 0; index < count; index++) {
+      const sw = switchPaths[index]
       if (Object.prototype.hasOwnProperty.call(switchStateCache, sw)) {
         out[index] = switchStateCache[sw]
-        return
+        continue
       }
       const value = app.getSelfPath(sw)
       if (value && typeof value.value !== 'undefined') {
         out[index] = value.value === 1 || value.value === true
       }
-    })
+    }
     return out
   }
 
@@ -862,8 +870,42 @@ export default function (app: any) {
     }
   }
 
+  // Per-bank state tracking for sendCZoneState's rate-limiter.
+  const lastCZoneStateMs: { [instance: number]: number } = {}
+  const lastCZoneStateBitmap: { [instance: number]: string } = {}
+
   function sendCZoneState (bank: any): void {
+    // Rate-limit + change-suppress: collapse back-to-back calls when
+    // the bank's switch state hasn't changed. sendCZoneState is called
+    // from FIVE places (the 2 s timer, every inbound PGN 65280 from
+    // both the server-wide stream AND the per-bank emulator stream,
+    // every inbound PGN 65284 query from both streams, and every
+    // SignalK delta on a switch path). Without this guard, the
+    // SignalK delta from inbound PGN 127501 broadcasts (every ~250 ms
+    // on a busy bus) loops back through the subscriptionmanager and
+    // fires sendCZoneState on every delta, producing PGN 65284 / 130817
+    // emissions at ~5 Hz instead of the spec's typical 0.5 Hz cadence.
+    // Real Zeus3S plotters detect the abnormal cadence and surface it
+    // as eCZoneConfigState[12] "Configuration conflict detected on
+    // network", refusing to leave the initial config-claim state.
+    // Verified 2026-05-10 from czone-scott-plotter-state-12-emulator-
+    // hardcoded-6.txt: PGN 130817 firing at avg 175 ms (min 1 ms,
+    // max 1998 ms) when the plotter sat on state 12.
+    //
+    // The two suppression conditions:
+    //   - if the switch-state bitmap is identical to the last emission
+    //     AND less than CZONE_HEARTBEAT_MS has elapsed, skip
+    //   - genuine state changes always fire immediately so the plotter
+    //     sees toggle-acks without lag
     const switches = readBankSwitchStates(bank)
+    const bitmapKey = switches.map(b => (b ? '1' : '0')).join('')
+    const now = Date.now()
+    const last = lastCZoneStateMs[bank.instance] ?? 0
+    const lastBitmap = lastCZoneStateBitmap[bank.instance]
+    if (bitmapKey === lastBitmap && now - last < CZONE_HEARTBEAT_MS) return
+    lastCZoneStateMs[bank.instance] = now
+    lastCZoneStateBitmap[bank.instance] = bitmapKey
+
     const dipswitch = bankDipswitch(bank)
     const bitmap = czoneFrame(
       CZONE_PGN_CIRCUIT_BITMAP,

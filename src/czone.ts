@@ -193,20 +193,29 @@ export function packStatusExtended (
   dipswitch: number,
   switches: boolean[]
 ): Buffer {
-  const payload = Buffer.alloc(CZONE_EXTENDED_PAYLOAD_LEN - 2)
+  // Per spec/pgn-130817.md, real CZone modules consistently emit 8 records
+  // per frame (the spec's max). Emitting fewer than 8 (or fewer than
+  // expected for the loaded .zcf's module type) triggers the plotter's
+  // configuration-conflict detection (eCZoneConfigState[12]). Always
+  // emit 8 records, with canonical bit-position circuit_ids 1, 2, 4,
+  // 8, 16, 32, 64, 128 — same as what the .zcf generator's circuit_ids
+  // section produces (spec/zcf-section-circuit-ids.md "Rule 1").
+  // Switches beyond index 7 don't get a unique circuit_id (they share
+  // id=0 in the .zcf too) and are reported via the PGN 65284 bitmap.
+  const RECORD_COUNT = 8
+  // Payload layout: [page, dipswitch, ...3-byte records].
+  const payload = Buffer.alloc(2 + RECORD_COUNT * CZONE_ANALOG_STRIDE)
   payload[0] = CZONE_EXTENDED_STATUS_PAGE
   payload[1] = dipswitch & 0xff
-  for (let i = 0; i < CZONE_SUPPORTED_SWITCHES; i++) {
-    const offset = CZONE_ANALOG_BASE_OFFSET - 2 + i * CZONE_ANALOG_STRIDE
-    if (offset + 2 < payload.length) {
-      // Canonical circuit_id per spec: 1<<i for i<8, else 0.
-      payload[offset] = i < 8 ? (1 << i) & 0xff : 0
-      // value_low = 0 (no measurement)
-      payload[offset + 1] = 0
-      // value_high_and_sign: bit 2 set = positive sign, bits 0..1 = magnitude=0,
-      // bit 3 (alarm flag) = 0, bits 4..7 = 0.
-      payload[offset + 2] = CZONE_EXTENDED_POSITIVE_FLAG
-    }
+  for (let i = 0; i < RECORD_COUNT; i++) {
+    const offset = 2 + i * CZONE_ANALOG_STRIDE
+    // Canonical circuit_id per spec: 1<<i (always; we emit the full 8 records)
+    payload[offset] = (1 << i) & 0xff
+    // value_low = 0 (no measurement)
+    payload[offset + 1] = 0
+    // value_high_and_sign: bit 2 set = positive sign, bits 0..1 = magnitude=0,
+    // bit 3 (alarm flag) = 0, bits 4..7 = 0.
+    payload[offset + 2] = CZONE_EXTENDED_POSITIVE_FLAG
   }
   return payload
 }
@@ -243,9 +252,16 @@ export function packBinaryStatusReport (
   instance: number,
   switches: boolean[]
 ): Buffer {
+  // PGN 127501 (Binary Status Report) is 8 bytes total: instance + 7 bytes
+  // packing 28 indicator slots at 2 bits per slot. We pack as many of the
+  // bank's switches as fit. Iterating the array (not a hardcoded count)
+  // means a 16-channel COI bank packs all 16 indicators; a 6-channel OI
+  // bank packs 6.
   const buf = Buffer.alloc(8)
   buf[0] = instance & 0xff
-  for (let i = 0; i < CZONE_SUPPORTED_SWITCHES; i++) {
+  const maxSlots = (8 - 1) * CZONE_SWITCHES_PER_STATUS_BYTE // 28
+  const count = Math.min(switches.length, maxSlots)
+  for (let i = 0; i < count; i++) {
     if (switches[i]) {
       const byteIndex = 1 + Math.floor(i / CZONE_SWITCHES_PER_STATUS_BYTE)
       const slot = i % CZONE_SWITCHES_PER_STATUS_BYTE
