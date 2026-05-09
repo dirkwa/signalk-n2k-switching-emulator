@@ -92,7 +92,13 @@ if (reparsed.body.configName.name !== spec.configName) {
 if (reparsed.body.modules.records.length !== 2) {
   throw new Error(`generated has ${reparsed.body.modules.records.length} modules, want 2`)
 }
-const m = reparsed.body.modules.records[0]
+// Find our emulated bank module by typeCode (m1) — the modules section
+// is now sorted by dipswitch ascending per the canonical Serialize
+// emission rule (czone-spec/spec/zcf-section-modules.md "Emission
+// order: dipswitch ascending"), so records[0] may be the MFD or our
+// bank depending on dipswitch values.
+const m = reparsed.body.modules.records.find(rec => rec.moduleSpecificValue !== 0x10)
+if (!m) throw new Error('generated file missing the emulated bank module')
 if (m.dipswitch !== spec.module.dipswitch) throw new Error(`module dipswitch = 0x${m.dipswitch.toString(16)}, want 0x${spec.module.dipswitch.toString(16)}`)
 if (m.name !== spec.module.name) throw new Error(`module name = ${m.name}, want ${spec.module.name}`)
 // Generator pads to the module type's output count -- m1=0x0f is 6
@@ -106,8 +112,14 @@ for (let i = 0; i < spec.circuits.length; i++) {
   if (reparsed.body.circuits.records[i].name !== spec.circuits[i].name) {
     throw new Error(`circuit ${i} name = ${reparsed.body.circuits.records[i].name}, want ${spec.circuits[i].name}`)
   }
-  if (reparsed.body.circuitIds.records[i].circuitId !== spec.circuits[i].circuitId) {
-    throw new Error(`circuit ${i} id = ${reparsed.body.circuitIds.records[i].circuitId}, want ${spec.circuits[i].circuitId}`)
+  // circuit_id is computed canonically as 1<<i for i<8 and 0 for i>=8
+  // (czone-spec/spec/zcf-section-circuit-ids.md "Rule 1: bit-position
+  // rule"). spec.circuits[i].circuitId is intentionally ignored by the
+  // generator for canonical compatibility with what tCZCD::Serialize
+  // emits.
+  const expectedCircuitId = i < 8 ? (1 << i) : 0
+  if (reparsed.body.circuitIds.records[i].circuitId !== expectedCircuitId) {
+    throw new Error(`circuit ${i} id = ${reparsed.body.circuitIds.records[i].circuitId}, want canonical ${expectedCircuitId}`)
   }
   if (reparsed.body.circuitIds.records[i].name !== spec.circuits[i].name) {
     throw new Error(`circuit_id ${i} name = ${reparsed.body.circuitIds.records[i].name}, want ${spec.circuits[i].name}`)
@@ -164,12 +176,17 @@ const heurIdsForSpec = spec.circuits.map(c => {
   const found = heuristic.circuits.find(h => h.name === c.name)
   return found ? found.circuitId : -1
 })
+// Generator now writes circuit_id = 1<<i for i<8, else 0 (per the
+// canonical bit-position rule decoded from tCZCD::Serialize). The
+// heuristic parser sees those canonical ids, not the user's nominal
+// spec.circuits[i].circuitId values.
 for (let i = 0; i < spec.circuits.length; i++) {
-  if (heurIdsForSpec[i] !== spec.circuits[i].circuitId) {
-    throw new Error(`heuristic parser id for ${spec.circuits[i].name} = ${heurIdsForSpec[i]}, want ${spec.circuits[i].circuitId}`)
+  const expected = i < 8 ? (1 << i) : 0
+  if (heurIdsForSpec[i] !== expected) {
+    throw new Error(`heuristic parser id for ${spec.circuits[i].name} = ${heurIdsForSpec[i]}, want canonical ${expected}`)
   }
 }
-console.log(`heuristic parser sees all ${spec.circuits.length} spec circuits with correct ids (total parsed: ${heuristic.circuits.length}): OK`)
+console.log(`heuristic parser sees all ${spec.circuits.length} spec circuits with canonical bit-position ids (total parsed: ${heuristic.circuits.length}): OK`)
 
 // Larger spec -- 8 switches, names with characters that exercise the
 // length-prefix scanner (numbers, spaces).
@@ -339,8 +356,11 @@ const control1Spec = {
 }
 const control1Gen = generateZcf(control1Spec, template)
 const control1Parsed = parseZcfFull(control1Gen)
-if (control1Parsed.body.modules.records[0].moduleSpecificValue !== 0x1c) {
-  throw new Error(`Control 1 typeCode override failed: got 0x${control1Parsed.body.modules.records[0].moduleSpecificValue.toString(16)}, want 0x1c`)
+// Find the bank module by typeCode (modules section is sorted by
+// dipswitch ascending — see comment in earlier test).
+const control1Mod = control1Parsed.body.modules.records.find(rec => rec.moduleSpecificValue === 0x1c)
+if (!control1Mod) {
+  throw new Error(`Control 1 typeCode override failed: no m1=0x1c module in generated file (got ${control1Parsed.body.modules.records.map(r => '0x' + r.moduleSpecificValue.toString(16)).join(', ')})`)
 }
 if (control1Parsed.body.circuits.records.length !== 16) {
   throw new Error(`Control 1 1-circuit spec should pad to 16 circuits, got ${control1Parsed.body.circuits.records.length}`)
@@ -355,8 +375,9 @@ const coiSpec = {
 }
 const coiGen = generateZcf(coiSpec, template)
 const coiParsed = parseZcfFull(coiGen)
-if (coiParsed.body.modules.records[0].moduleSpecificValue !== 0x1f) {
-  throw new Error(`COI typeCode override failed: got 0x${coiParsed.body.modules.records[0].moduleSpecificValue.toString(16)}, want 0x1f`)
+const coiMod = coiParsed.body.modules.records.find(rec => rec.moduleSpecificValue === 0x1f)
+if (!coiMod) {
+  throw new Error(`COI typeCode override failed: no m1=0x1f module in generated file (got ${coiParsed.body.modules.records.map(r => '0x' + r.moduleSpecificValue.toString(16)).join(', ')})`)
 }
 if (coiParsed.body.circuits.records.length !== 16) {
   throw new Error(`COI 1-circuit spec should pad to 16 circuits, got ${coiParsed.body.circuits.records.length}`)

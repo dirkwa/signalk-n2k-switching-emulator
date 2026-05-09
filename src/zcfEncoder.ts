@@ -1075,7 +1075,15 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
         spec.module.typeCode ?? moduleProto.moduleSpecificValue
     },
     ...remainingModules
-  ]
+    // Sort modules by dipswitch ascending. Verified canonical 2026-05-10
+    // against czone-spec/spec/zcf-section-modules.md ("Emission order:
+    // dipswitch ascending"). Every real-world working .zcf has its
+    // modules in dipswitch ascending order; the Windows tool roundtrip
+    // re-orders them this way too. The library's Serialize iterates the
+    // modules vector linearly, so the order originates upstream — most
+    // likely from a sorted-insertion AddModule. Match the canonical
+    // shape by sorting at emit time.
+  ].sort((a, b) => a.dipswitch - b.dipswitch)
 
   // Pad the spec circuits up to the module type's output count so the
   // Configuration Tool doesn't synthesise "DC{n} - Paralleled with DC1"
@@ -1198,10 +1206,35 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
     ]
   }))
 
+  // Per-circuit canonical-emission rules decoded from win_CZoneCore.dll's
+  // tCZCD::Serialize (czone-spec/spec/zcf-section-circuit-ids.md):
+  //
+  //   - circuit_id LSB = 1 << chan_low for chan_low < 8, else 0.
+  //     Empirical: every working .zcf assigns 1, 2, 4, 8, 16, 32, 64, 128
+  //     to the first 8 circuits and 0 to circuits 9+. Sequential values
+  //     like 13..28 (our prior generator output) diverge from canonical
+  //     and probably trip plotter-side validation we haven't fully
+  //     decoded.
+  //
+  //   - flags blob byte 6 (template inherits 0xe8) and byte 7 (template
+  //     0x03) are cleared to 0x00 in the canonical emission. The
+  //     non-zero values in the Windows tool's roundtrip-saved file
+  //     correspond to user-set extended-attribute bits we don't model.
+  //     Default-canonical = 0x00 in both bytes.
+  //
+  // The user-supplied `c.circuitId` from `spec.circuits[].circuitId` is
+  // intentionally IGNORED here for the canonical bit-position scheme.
+  // (It's still threaded through `spec.circuits[].circuitId` for the
+  // bankFirstCircuitId-driven side-bar binding the runtime uses for
+  // PGN 65280 routing — and that side keeps its own non-canonical
+  // sequential mapping.)
+  const cidFlagsCanonical = Buffer.from(cidProto.flags)
+  cidFlagsCanonical[6] = 0x00
+  cidFlagsCanonical[7] = 0x00
   parsed.body.circuitIds.records = circuitsForGen.map((c, i) => ({
     channelAddress: (drefBaseAddr + i) & 0xffff,
-    flags: Buffer.from(cidProto.flags),
-    circuitId: c.circuitId >>> 0,
+    flags: Buffer.from(cidFlagsCanonical),
+    circuitId: i < 8 ? 1 << i : 0,
     name: c.name
   }))
 
