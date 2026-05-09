@@ -962,51 +962,31 @@ const LABELLED_ENTITIES_SECTION_TAG = 0x05
  * field_a/c are preserved from the template. The section's outer
  * record_count and section_payload_size are recomputed.
  */
-function rewriteLabelledEntities (
-  trailing: TrailingSection[],
-  dipswitch: number,
-  moduleName: string,
-  bankInstance: number
-): void {
+function clearLabelledEntities (trailing: TrailingSection[]): void {
+  // Empty the labelled_entities section. Verified 2026-05-10 against
+  // Scott's working Gannet-nosb_Scott_works.zcf, which has zero
+  // labelled_entity records. Earlier generator versions wrote one
+  // entry (type=module_dipswitch, b=bankInstance, c=0x01,
+  // name=moduleName) on the speculation that this was needed to
+  // populate the "Switch Bank Instance" UI in the CZone Configuration
+  // Tool. That speculation isn't supported by working real-world files
+  // — Gannet has the section empty and loads cleanly. The previous
+  // generator's labelled-entity output was the most distinctive
+  // structural difference between our hung-plotter file and Gannet's
+  // working file (per the byte-diff in czone-spec commits 9dceaa9 /
+  // 307ca08). Match Gannet — clear the section. If a future user
+  // needs the Switch Bank Instance binding, restore via an explicit
+  // opt-in flag once we understand its real role.
   if (trailing.length <= LABELLED_ENTITIES_TRAILING_INDEX) return
   const ts = trailing[LABELLED_ENTITIES_TRAILING_INDEX]
   if (ts.sectionTag !== LABELLED_ENTITIES_SECTION_TAG) return
-  if (ts.recordCount < 1 || ts.payload.length < 5) return
-  // Read the template's first record header (5 bytes: type, a, b, c, name_len).
-  const fieldA = ts.payload[1]
-  const fieldC = ts.payload[3]
-  const oldNameLen = ts.payload[4]
-  // Preserve any subsequent records verbatim (we only mutate record 0).
-  const tail = ts.payload.slice(5 + oldNameLen)
-  const nameBytes = Buffer.from(moduleName, 'utf8')
-  if (nameBytes.length > 255) {
-    throw new Error('module name too long for labelled_entities (>255 bytes)')
-  }
-  if (nameBytes.length === 0) {
-    // czone-spec/spec/zcf-parser.md "Pathological-input hangs": an empty
-    // labelled-entity name traps libCZoneCore.so's post-parse duplicate-
-    // detection pass in an infinite loop. The plotter freezes — only a
-    // watchdog or hard reset clears it. Refuse to emit such a file.
-    throw new Error(
-      'labelled_entities name must be at least 1 byte; an empty name hangs the plotter'
-    )
-  }
-  const newRecord = Buffer.concat([
-    Buffer.from([
-      dipswitch & 0xff,
-      fieldA,
-      bankInstance & 0xff,
-      fieldC,
-      nameBytes.length
-    ]),
-    nameBytes
-  ])
-  const newPayload = Buffer.concat([newRecord, tail])
   trailing[LABELLED_ENTITIES_TRAILING_INDEX] = {
-    sectionPayloadSize: 3 + newPayload.length,
-    recordCount: ts.recordCount,
+    sectionPayloadSize: 3, // 4-byte size + 2-byte count + 1-byte tag = 7 bytes header,
+    // but section_payload_size is "size starting after the size
+    // field itself" = count(2) + tag(1) + payload(0) = 3
+    recordCount: 0,
     sectionTag: ts.sectionTag,
-    payload: newPayload
+    payload: Buffer.alloc(0)
   }
 }
 
@@ -1237,12 +1217,7 @@ export function generateZcf (spec: ZcfGenSpec, template: Buffer): Buffer {
   //   byte 3:  field_c
   //   byte 4:  name_length
   //   bytes 5..: name (UTF-8)
-  rewriteLabelledEntities(
-    parsed.body.trailingSections,
-    spec.module.dipswitch & 0xff,
-    spec.module.name,
-    (spec.bankInstance ?? 0) & 0xff
-  )
+  clearLabelledEntities(parsed.body.trailingSections)
 
   return encodeZcf(parsed)
 }

@@ -239,10 +239,17 @@ for (let i = 0; i < catSpec.circuits.length; i++) {
 }
 console.log(`generator: per-circuit subCategory threaded into flags_b correctly: OK`)
 
-// Bank instance: spec.bankInstance lands in labelled_entities[0].field_b.
-// Verified against config-6.zcf (field_b=5 + name "SW Bank 5"). Without
-// this rewrite the Configuration Tool's Switch Bank PGN config row shows
-// Switch Bank Instance = 0 regardless of the user's bank.instance.
+// labelled_entities trailing section is emitted EMPTY. Verified
+// 2026-05-10 against Scott's working Gannet-nosb_Scott_works.zcf
+// (zero entries) and against samples/real_world/Meitaki 07.04.25.zcf
+// (43 modules, also zero entries). Real-world files use this section
+// only to label external integrations (Victron, Sentinel, Siren
+// Marine) — nothing the SignalK plugin emulates. The earlier rewrite
+// path (one entry with type=module_dipswitch, b=bankInstance,
+// c=0x01, name=moduleName) was a structural divergence from
+// known-working files; clearing the section restores parity. See
+// czone-spec/spec/zcf-parser.md for the byte-diff that motivated
+// this change.
 const bankSpec = {
   configName: 'Bank 16 Test',
   module: { dipswitch: 0x08, name: 'Bank 16 Module' },
@@ -252,31 +259,15 @@ const bankSpec = {
 const bankGen = generateZcf(bankSpec, template)
 const bankParsed = parseZcfFull(bankGen)
 const labelEntsTrailing = bankParsed.body.trailingSections[21]
-if (!labelEntsTrailing || labelEntsTrailing.payload.length < 5) {
-  throw new Error('labelled_entities trailing section missing or too short')
+if (!labelEntsTrailing) {
+  throw new Error('labelled_entities trailing section missing')
 }
-const fieldB = labelEntsTrailing.payload[2]
-if (fieldB !== 16) {
-  throw new Error(`labelled_entities[0].field_b = ${fieldB}, want 16 (the bank instance)`)
+if (labelEntsTrailing.recordCount !== 0 || labelEntsTrailing.payload.length !== 0) {
+  throw new Error(
+    `labelled_entities expected empty (recordCount=0, payload.length=0), got recordCount=${labelEntsTrailing.recordCount}, payload.length=${labelEntsTrailing.payload.length}`
+  )
 }
-console.log(`generator: bankInstance landed in labelled_entities[0].field_b: OK`)
-
-// Empty labelled-entity name hangs the plotter (czone-spec/spec/zcf-parser.md
-// "Pathological-input hangs"). The generator must refuse to emit such a file.
-let emptyNameRejected = false
-try {
-  generateZcf({ ...bankSpec, module: { ...bankSpec.module, name: '' } }, template)
-} catch (err) {
-  if (/empty name hangs the plotter|labelled_entities name must be at least 1 byte/i.test(err.message)) {
-    emptyNameRejected = true
-  } else {
-    throw err
-  }
-}
-if (!emptyNameRejected) {
-  throw new Error('empty module name should have thrown; generator emitted a hang-inducing .zcf')
-}
-console.log(`generator: empty labelled-entity name is refused (plotter-hang guard): OK`)
+console.log(`generator: labelled_entities section emitted empty (matches Gannet/Meitaki): OK`)
 
 // Paralleled-output suppression: with module type m1=0x0f (3 outputs),
 // supplying 1 spec circuit pads to 3 generated circuits so the
