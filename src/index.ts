@@ -690,6 +690,13 @@ export default function (app: any) {
                   minimum: 1,
                   maximum: 252
                 },
+                czoneAnnounceUnique: {
+                  type: 'string',
+                  title: 'Override CZone announce unique (advanced)',
+                  description:
+                    'Override the 20-bit unique ID announced in PGN 65290 for this bank. Empty = derive from vesselUuid+bank.instance (default). libCZoneCore compares this against the unique field of the loaded .zcf module on the plotter and fires the "Configuration conflict" popup on mismatch — set to match what the plotter has loaded for the dipswitch slot you are claiming. Accepts decimal ("899387"), 0x-hex ("0xDB13B"), or bare hex ("DB13B"). YDAB-01 default = 0xDB13B.',
+                  default: ''
+                },
                 czoneModuleName: {
                   type: 'string',
                   title: 'CZone module name',
@@ -875,6 +882,26 @@ export default function (app: any) {
   }
 
   function bankSerial (bank: any): number {
+    // Per-bank explicit override takes precedence so users can match a
+    // specific module's unique that the plotter has loaded in its .zcf.
+    // libCZoneCore's PGN-65290 inbound handler compares the announce's
+    // unique field against the loaded module's unique (from BSS+0x69e6c)
+    // and fires the conflict-popup chain on mismatch — see
+    // czone-spec/spec/czone-config-state-machine.md commit 830b2c4
+    // "popup discriminator IDENTIFIED as the unique field".
+    //
+    // Accepts decimal ("899387"), 0x-prefixed hex ("0xDB13B"), or bare hex
+    // ("DB13B"). Clamped to 20 bits (the on-wire field width).
+    const override = bank?.czoneAnnounceUnique
+    if (typeof override === 'string' && override.trim() !== '') {
+      const s = override.trim()
+      let n: number
+      if (/^0x[0-9a-f]+$/i.test(s)) n = parseInt(s, 16)
+      else if (/^[0-9]+$/.test(s)) n = parseInt(s, 10)
+      else if (/^[0-9a-f]+$/i.test(s)) n = parseInt(s, 16)
+      else n = NaN
+      if (Number.isFinite(n) && n >= 0) return n & 0xfffff
+    }
     return deriveUniqueSerial(
       `${app.config?.settings?.vesselUuid ??
         app.config?.settings?.vesselMMSI ??
