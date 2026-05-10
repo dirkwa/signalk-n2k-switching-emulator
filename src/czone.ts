@@ -128,11 +128,12 @@ export function packZcfChunk (chunkIdx: number, data: Buffer): Buffer {
  * by `czoneFrame(130816, payload)` and emitted onto the bus.
  */
 export function chunkZcf (
-  zcf: Buffer
+  zcf: Buffer,
+  startChunkIdx: number = 0
 ): Array<{ chunkIdx: number; payload: Buffer }> {
   const chunks: Array<{ chunkIdx: number; payload: Buffer }> = []
   let offset = 0
-  let chunkIdx = 0
+  let chunkIdx = startChunkIdx & 0xffff
   while (offset + CZONE_ZCF_CHUNK_DATA_MAX <= zcf.length) {
     chunks.push({
       chunkIdx,
@@ -142,14 +143,14 @@ export function chunkZcf (
       )
     })
     offset += CZONE_ZCF_CHUNK_DATA_MAX
-    chunkIdx += 1
+    chunkIdx = (chunkIdx + 1) & 0xffff
   }
   if (offset < zcf.length) {
     chunks.push({
       chunkIdx,
       payload: packZcfChunk(chunkIdx, zcf.slice(offset))
     })
-    chunkIdx += 1
+    chunkIdx = (chunkIdx + 1) & 0xffff
   }
   // Explicit zero-byte terminator chunk.
   chunks.push({ chunkIdx, payload: packZcfChunk(chunkIdx, Buffer.alloc(0)) })

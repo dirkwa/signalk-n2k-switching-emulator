@@ -640,6 +640,22 @@ export default function (app: any) {
               "the plotter's loaded .zcf. Default off.",
             default: false
           },
+          czoneChunkIdxOffset: {
+            type: 'integer',
+            title: 'PGN 130816 starting chunk_idx (advanced debug)',
+            description:
+              'Shift all emitted chunk_idx values by this offset. ' +
+              'Default 0 (canonical). libCZoneCore receive handler at vma 0x6a084 ' +
+              'requires the inbound chunk_idx to match its expected_next_chunk_idx ' +
+              '(singleton+0x58); only the success path advances that counter, with no ' +
+              'documented reset. If the plotter is stuck at "Receiving 0%" because the ' +
+              'counter is wedged at a non-zero value from a prior session, ' +
+              'rebasing the chunks here (try 1..15 in turn) lets you probe which value ' +
+              'unsticks it. czone-spec commit b0a017e for the decode.',
+            default: 0,
+            minimum: 0,
+            maximum: 255
+          },
           banks: {
             title: 'Banks',
             type: 'array',
@@ -1250,7 +1266,10 @@ export default function (app: any) {
       throw new Error('no CZone-enabled bank to push from')
     }
     const bank = banks[0]
-    const chunks = chunkZcf(zcf)
+    const startIdx = Number.isFinite(props?.czoneChunkIdxOffset)
+      ? Number(props.czoneChunkIdxOffset) & 0xffff
+      : 0
+    const chunks = chunkZcf(zcf, startIdx)
     for (const c of chunks) {
       const frame = czoneFrame(CZONE_PGN_ZCF_TRANSFER, c.payload)
       sendFromBank(bank, frame)
