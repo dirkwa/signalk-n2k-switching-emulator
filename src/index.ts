@@ -1000,6 +1000,11 @@ export default function (app: any) {
   }
 
   function buildAddressClaim (bank: any): PGN_60928 {
+    // Device instance splits 3 bits low + 5 bits high = 8 bits total. Convention
+    // (Maretron, Yacht Devices, etc.) is to set this to the bank instance so
+    // multiple switch banks of the same device class on the same bus are
+    // distinguishable in the NAME itself, not just the per-PGN instance fields.
+    const inst = (bank.instance ?? 0) & 0xff
     return new PGN_60928({
       uniqueNumber: bankSerial(bank),
       // czone-spec/spec/discovery.md "MFG=295 gate": the CZone receiver
@@ -1011,9 +1016,9 @@ export default function (app: any) {
       manufacturerCode: ManufacturerCode.BepMarine2,
       deviceFunction: DeviceFunction.SwitchInterface,
       deviceClass: DeviceClass.ElectricalDistribution,
-      deviceInstanceLower: 0,
-      deviceInstanceUpper: 0,
-      systemInstance: 0,
+      deviceInstanceLower: inst & 0x07,
+      deviceInstanceUpper: (inst >> 3) & 0x1f,
+      systemInstance: inst & 0x0f,
       industryGroup: IndustryCode.Marine,
       arbitraryAddressCapable: YesNo.Yes
     })
