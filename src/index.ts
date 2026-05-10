@@ -610,6 +610,36 @@ export default function (app: any) {
             default: '00000001',
             pattern: '^[01]{8}$'
           },
+          czoneSuppressAnnounce: {
+            type: 'boolean',
+            title: 'Diagnostic: suppress PGN 65290 announce',
+            description:
+              'Stop emitting the periodic CZone module-announce frame. Bisection ' +
+              "toggle for narrowing which PGN trips the plotter's host-local " +
+              '"Configuration conflict" popup (eCZoneConfigState=3). Default off.',
+            default: false
+          },
+          czoneSuppressHeartbeat: {
+            type: 'boolean',
+            title: 'Diagnostic: suppress PGN 65284 circuit-state heartbeat',
+            description:
+              'Stop emitting the periodic CZone circuit-state bitmap frame. ' +
+              'Bisection toggle. Note: real CZone modules use this as a heartbeat; ' +
+              'suppressing it will cause the plotter to drop the module from its ' +
+              'CZone panel after ~3x the prior cadence. Default off.',
+            default: false
+          },
+          czoneSuppressStatusExt: {
+            type: 'boolean',
+            title: 'Diagnostic: suppress PGN 130817 status-extended',
+            description:
+              'Stop emitting the per-circuit status-extended frame. Bisection ' +
+              'toggle. Suspected most-likely trigger of the host-local ' +
+              '"Configuration conflict" popup since the plugin emits records ' +
+              'with bit-position circuit_ids that may not match any module in ' +
+              "the plotter's loaded .zcf. Default off.",
+            default: false
+          },
           banks: {
             title: 'Banks',
             type: 'array',
@@ -907,19 +937,23 @@ export default function (app: any) {
     lastCZoneStateBitmap[bank.instance] = bitmapKey
 
     const dipswitch = bankDipswitch(bank)
-    const bitmap = czoneFrame(
-      CZONE_PGN_CIRCUIT_BITMAP,
-      packCircuitBitmap(dipswitch, switches)
-    )
-    debug('sending czone 65284 %s', bitmap)
-    sendFromBank(bank, bitmap)
+    if (!props?.czoneSuppressHeartbeat) {
+      const bitmap = czoneFrame(
+        CZONE_PGN_CIRCUIT_BITMAP,
+        packCircuitBitmap(dipswitch, switches)
+      )
+      debug('sending czone 65284 %s', bitmap)
+      sendFromBank(bank, bitmap)
+    }
 
-    const status = czoneFrame(
-      CZONE_PGN_STATUS_EXTENDED,
-      packStatusExtended(dipswitch, switches)
-    )
-    debug('sending czone 130817 %s', status)
-    sendFromBank(bank, status)
+    if (!props?.czoneSuppressStatusExt) {
+      const status = czoneFrame(
+        CZONE_PGN_STATUS_EXTENDED,
+        packStatusExtended(dipswitch, switches)
+      )
+      debug('sending czone 130817 %s', status)
+      sendFromBank(bank, status)
+    }
   }
 
   function buildAddressClaim (bank: any): PGN_60928 {
@@ -1271,6 +1305,7 @@ export default function (app: any) {
   }
 
   function sendBankAnnounce (bank: any): void {
+    if (props?.czoneSuppressAnnounce) return
     const dipswitch = bankDipswitch(bank)
     const serial = bankSerial(bank)
     const announce = czoneFrame(
